@@ -27,8 +27,8 @@ VERSION="2.0.0"
 CLAUDE_VERSION="latest"
 
 # Official Anthropic download URLs
-DMG_URL_PRIMARY="https://storage.googleapis.com/osprey-downloads-c02f6a0d-347c-492b-a752-3e0651722e97/nest/Claude.dmg"
-DMG_URL_FALLBACK="https://claude.ai/api/desktop/darwin/universal/dmg/latest/redirect"
+DMG_URL_PRIMARY="https://claude.ai/api/desktop/darwin/universal/dmg/latest/redirect"
+DMG_URL_FALLBACK="https://storage.googleapis.com/osprey-downloads-c02f6a0d-347c-492b-a752-3e0651722e97/nest/Claude.dmg"
 
 # Stub download URLs (from GitHub repo)
 REPO_BASE="https://raw.githubusercontent.com/johnzfitch/claude-cowork-linux/master"
