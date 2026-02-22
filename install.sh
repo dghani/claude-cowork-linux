@@ -9,8 +9,8 @@
 #   1. Checks/installs dependencies (7z, node, electron, asar)
 #   2. Downloads Claude macOS DMG from Anthropic's official CDN
 #   3. Extracts and patches the app for Linux compatibility
-#   4. Installs to /Applications/Claude.app (macOS-style path for compat)
-#   5. Creates desktop entry and CLI command
+#   4. Installs to ~/.local/share/claude-desktop (no sudo required)
+#   5. Creates desktop entry and ~/.local/bin launchers
 #
 # Requirements: Linux with apt/pacman/dnf, Node.js 18+, ~500MB disk space
 #
@@ -37,8 +37,8 @@ NATIVE_STUB_URL="${REPO_BASE}/stubs/@ant/claude-native/index.js"
 # Minimum expected DMG size (100MB) - basic integrity check
 MIN_DMG_SIZE=100000000
 
-# Installation paths
-INSTALL_DIR="/Applications/Claude.app"
+# Installation paths (user-local, no sudo required)
+INSTALL_DIR="$HOME/.local/share/claude-desktop"
 USER_DATA_DIR="$HOME/Library/Application Support/Claude"
 USER_LOG_DIR="$HOME/Library/Logs/Claude"
 USER_CACHE_DIR="$HOME/Library/Caches/Claude"
@@ -582,11 +582,11 @@ LOADER
 # ============================================================
 
 create_launcher() {
-    local macos_dir="$1"
+    local install_dir="$1"
 
-    cat > "$macos_dir/Claude" << 'LAUNCHER'
+    cat > "$install_dir/claude-desktop" << 'LAUNCHER'
 #!/bin/bash
-# Claude launcher script
+# Claude Desktop launcher
 
 SCRIPT_PATH="$0"
 while [ -L "$SCRIPT_PATH" ]; do
@@ -596,8 +596,7 @@ while [ -L "$SCRIPT_PATH" ]; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
-RESOURCES_DIR="$SCRIPT_DIR/../Resources"
-cd "$RESOURCES_DIR"
+cd "$SCRIPT_DIR"
 
 ELECTRON_ARGS=()
 for arg in "$@"; do
@@ -616,11 +615,16 @@ if [[ -n "$WAYLAND_DISPLAY" ]] || [[ "$XDG_SESSION_TYPE" == "wayland" ]]; then
   export ELECTRON_OZONE_PLATFORM_HINT=wayland
 fi
 
+mkdir -p "$HOME/Library/Logs/Claude"
+
 # Launch Electron
-exec electron linux-loader.js "${ELECTRON_ARGS[@]}" 2>&1 | tee -a ~/Library/Logs/Claude/startup.log
+exec electron linux-loader.js "${ELECTRON_ARGS[@]}" \
+  --no-sandbox \
+  --password-store=gnome-libsecret \
+  2>&1 | tee -a "$HOME/Library/Logs/Claude/startup.log"
 LAUNCHER
 
-    chmod +x "$macos_dir/Claude"
+    chmod +x "$install_dir/claude-desktop"
     log_success "Created launcher script"
 }
 
@@ -628,76 +632,53 @@ LAUNCHER
 # Install Application
 # ============================================================
 
-confirm_sudo_operations() {
-    echo ""
-    log_warn "The following operations require sudo (root) privileges:"
-    echo "  - Create directory: $INSTALL_DIR"
-    echo "  - Copy application files to $INSTALL_DIR"
-    echo "  - Create symlinks: /usr/local/bin/claude-desktop and /usr/local/bin/claude-cowork"
-    echo ""
-    read -r -p "Proceed with installation? [Y/n] " response
-    response=${response:-Y}
-    if [[ ! "$response" =~ ^[Yy]$ ]]; then
-        die "Installation cancelled by user"
-    fi
-}
-
 install_app() {
     local claude_app="$1"
     local app_extract_dir="$2"
 
-    # Show what sudo operations will be performed
-    confirm_sudo_operations
-
     log_info "Installing to $INSTALL_DIR..."
 
-    # Remove old installation (with safety check)
+    # Remove old installation if present
     if [[ -d "$INSTALL_DIR" ]]; then
         log_info "Removing previous installation..."
-        sudo rm -rf "$INSTALL_DIR"
+        rm -rf "$INSTALL_DIR"
     fi
 
-    # Create directory structure
-    sudo mkdir -p "$INSTALL_DIR/Contents/"{MacOS,Resources,Frameworks}
+    # Create directory structure (flat, no macOS hierarchy)
+    mkdir -p "$INSTALL_DIR"/{app,stubs,resources}
+    mkdir -p "$HOME/.local/bin"
 
     # Copy extracted app code
-    sudo cp -r "$app_extract_dir" "$INSTALL_DIR/Contents/Resources/app"
+    cp -r "$app_extract_dir"/* "$INSTALL_DIR/app/"
 
-    # Copy resources from original app
-    sudo cp -r "$claude_app/Contents/Resources/"* "$INSTALL_DIR/Contents/Resources/" 2>/dev/null || true
+    # Copy resources from original app (icons, lproj, etc.)
+    cp -r "$claude_app/Contents/Resources/"* "$INSTALL_DIR/resources/" 2>/dev/null || true
 
-    # Create and install stubs
-    local stub_swift_dir="$INSTALL_DIR/Contents/Resources/stubs/@ant/claude-swift/js"
-    local stub_native_dir="$INSTALL_DIR/Contents/Resources/stubs/@ant/claude-native"
-
-    sudo mkdir -p "$stub_swift_dir" "$stub_native_dir"
-
-    # Download stubs from repo then copy
+    # Download stubs from repo
     download_swift_stub "$WORK_DIR/stubs/swift"
     download_native_stub "$WORK_DIR/stubs/native"
 
-    sudo cp "$WORK_DIR/stubs/swift/index.js" "$stub_swift_dir/index.js"
-    sudo cp "$WORK_DIR/stubs/native/index.js" "$stub_native_dir/index.js"
+    # Install stubs into app's node_modules
+    cp "$WORK_DIR/stubs/swift/index.js" "$INSTALL_DIR/app/node_modules/@ant/claude-swift/js/index.js"
+    cp "$WORK_DIR/stubs/native/index.js" "$INSTALL_DIR/app/node_modules/@ant/claude-native/index.js"
 
-    # Replace original @ant modules with stubs
-    sudo cp "$WORK_DIR/stubs/swift/index.js" "$INSTALL_DIR/Contents/Resources/app/node_modules/@ant/claude-swift/js/index.js"
-    sudo cp "$WORK_DIR/stubs/native/index.js" "$INSTALL_DIR/Contents/Resources/app/node_modules/@ant/claude-native/index.js"
+    # Also keep copies in stubs/ for reference
+    mkdir -p "$INSTALL_DIR/stubs/@ant/claude-swift/js" "$INSTALL_DIR/stubs/@ant/claude-native"
+    cp "$WORK_DIR/stubs/swift/index.js" "$INSTALL_DIR/stubs/@ant/claude-swift/js/index.js"
+    cp "$WORK_DIR/stubs/native/index.js" "$INSTALL_DIR/stubs/@ant/claude-native/index.js"
 
     # Create Linux loader
-    create_linux_loader "$INSTALL_DIR/Contents/Resources"
+    create_linux_loader "$INSTALL_DIR"
 
-    # Create launcher
-    create_launcher "$INSTALL_DIR/Contents/MacOS"
+    # Create launcher script
+    create_launcher "$INSTALL_DIR"
 
-    # Create canonical launchers in PATH
-    sudo ln -sf "$INSTALL_DIR/Contents/MacOS/Claude" /usr/local/bin/claude-desktop
-    sudo ln -sf "$INSTALL_DIR/Contents/MacOS/Claude" /usr/local/bin/claude-cowork
-    # Back-compat only: do not clobber existing Claude Code CLI if already installed.
-    if [[ ! -e /usr/local/bin/claude ]]; then
-      sudo ln -sf "$INSTALL_DIR/Contents/MacOS/Claude" /usr/local/bin/claude
-    fi
+    # Symlink into ~/.local/bin (should be on PATH)
+    ln -sf "$INSTALL_DIR/claude-desktop" "$HOME/.local/bin/claude-desktop"
+    ln -sf "$INSTALL_DIR/claude-desktop" "$HOME/.local/bin/claude-cowork"
 
     log_success "Installed to $INSTALL_DIR"
+    log_info "Launcher: ~/.local/bin/claude-desktop"
 }
 
 # ============================================================
@@ -755,8 +736,8 @@ create_desktop_entry() {
 Type=Application
 Name=Claude
 Comment=AI assistant by Anthropic
-Exec=/usr/local/bin/claude-desktop %U
-Icon=$INSTALL_DIR/Contents/Resources/icon.icns
+Exec=$HOME/.local/bin/claude-desktop %U
+Icon=$INSTALL_DIR/resources/icon.icns
 Terminal=false
 Categories=Utility;Development;Chat;
 Keywords=AI;assistant;chat;anthropic;
@@ -795,7 +776,7 @@ main() {
 
     # Check if running as root (bad idea)
     if [[ $EUID -eq 0 ]]; then
-        die "Do not run as root. The script will use sudo when needed."
+        die "Do not run as root. The installer uses user-local paths only."
     fi
 
     # Step 1: Dependencies
@@ -836,15 +817,17 @@ main() {
     echo "=========================================="
     echo ""
     echo "Launch Claude:"
-    echo "  Command:  claude-cowork"
-    echo "  Alt Cmd:  claude-desktop"
+    echo "  Command:  claude-desktop  (or claude-cowork)"
     echo "  Desktop:  Search for 'Claude' in app launcher"
     echo ""
     echo "Options:"
-    echo "  claude --debug      Enable trace logging"
-    echo "  claude --devtools   Enable Chrome DevTools"
+    echo "  claude-desktop --debug      Enable trace logging"
+    echo "  claude-desktop --devtools   Enable Chrome DevTools"
     echo ""
-    echo "Logs: ~/Library/Logs/Claude/startup.log"
+    echo "Installed: $INSTALL_DIR"
+    echo "Logs:      ~/Library/Logs/Claude/startup.log"
+    echo ""
+    echo "Make sure ~/.local/bin is on your PATH."
     echo ""
 }
 
