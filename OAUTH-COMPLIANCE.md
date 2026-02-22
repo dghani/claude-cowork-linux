@@ -126,11 +126,15 @@ const CREDENTIAL_EXEMPT_KEYS = new Set(['CLAUDE_CODE_OAUTH_TOKEN']);
   intentional and required: it is how Claude Desktop passes authentication to the CLI on
   macOS as well. The token goes from one Anthropic application (Claude Desktop) to another
   (Claude Code CLI), which is exactly the use case the token is designed for.
+- `ANTHROPIC_API_KEY` may also be forwarded via the env allowlist to Anthropic-maintained
+  subprocesses that explicitly require it (e.g. SDK bridge / stub code). It is not intended
+  to be propagated to arbitrary third-party tools.
 - All other credential-pattern env vars (e.g. `ANTHROPIC_AUTH_TOKEN`, generic
   `bearer_token`, `session_cookie`) are blocked and logged, preventing token leakage to
   the subprocess environment.
-- The allowlist (`ENV_ALLOWLIST`) only includes system and Claude configuration variables;
-  arbitrary renderer env vars never reach the subprocess.
+- The allowlist (`ENV_ALLOWLIST`) includes system and Claude configuration variables, plus
+  a small, explicit set of auth-related keys (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`);
+  arbitrary renderer env vars outside this set never reach the subprocess.
 
 **How this meets the policy**:
 - The token is forwarded only to the official, unmodified Claude Code CLI binary
