@@ -91,11 +91,11 @@ CLAUDE_DMG=~/Downloads/Claude-1.1.4010.dmg ./install.sh
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Claude Desktop (Electron)                    │
+│                     Claude Desktop (Electron)                   │
 ├─────────────────────────────────────────────────────────────────┤
 │  Main Process (index.js)                                        │
 │  ├── Platform headers: darwin/14.0 (spoofed)                    │
-│  ├── Platform gate: patched for Linux support                    │
+│  ├── Platform gate: patched for Linux support                   │
 │  └── LocalAgentModeSessionManager                               │
 ├─────────────────────────────────────────────────────────────────┤
 │  @ant/claude-swift (STUBBED)                                    │
@@ -110,7 +110,7 @@ CLAUDE_DMG=~/Downloads/Claude-1.1.4010.dmg ./install.sh
 │  └── Platform helpers → Minimal compatibility shims             │
 ├─────────────────────────────────────────────────────────────────┤
 │  Claude Code Binary                                             │
-│  └── ~/.config/Claude/claude-code-vm/2.1.5/claude (ELF x86_64) │
+│  └── ~/.config/Claude/claude-code-vm/2.1.5/claude (ELF x86_64)  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -327,20 +327,13 @@ npm install electron
 <details>
 <summary><strong>Verify patches were applied</strong></summary>
 
-Check that all 3 patches are present in `linux-app-extracted/.vite/build/index.js`:
+Check that the Cowork patch is present in `linux-app-extracted/.vite/build/index.js`:
 
 ```bash
-# 1. Platform gate (cowork patch marker)
-grep -q 'cowork-patched' linux-app-extracted/.vite/build/index.js && echo "✓ Patch 1" || echo "✗ Patch 1 missing"
-
-# 2. IPC origin validation (Q7 function)
-grep -q 'process.platform==="linux"' linux-app-extracted/.vite/build/index.js && echo "✓ Patch 2" || echo "✗ Patch 2 missing"
-
-# 3. Extensions/connectors ($n variable)
-grep -q '\$n=process.platform==="darwin"||process.platform==="linux"' linux-app-extracted/.vite/build/index.js && echo "✓ Patch 3" || echo "✗ Patch 3 missing"
+grep -q 'cowork-patched' linux-app-extracted/.vite/build/index.js && echo "✓ Cowork patch applied" || echo "✗ Patch missing - run ./install.sh"
 ```
 
-If any patches are missing, run `./install.sh` again.
+The patch replaces the platform-gate function to return `{status:"supported"}` unconditionally, enabling Cowork on Linux. The `/*cowork-patched*/` marker indicates successful patching.
 
 </details>
 
@@ -488,7 +481,7 @@ This project includes security hardening:
 
 ## Credits
 
-Reverse engineered and implemented by examining the Claude Desktop Electron app structure, binary analysis with pyghidra, and iterative debugging.
+Reverse engineered and implemented by examining the Claude Desktop Electron app structure, binary analysis with pyghidra-lite, and iterative debugging.
 
 ---
 
