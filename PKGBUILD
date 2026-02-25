@@ -35,7 +35,7 @@ _rnet_wheel="rnet-3.0.0rc14-cp311-abi3-manylinux_2_34_x86_64.whl"
 
 source=(
     "git+https://github.com/johnzfitch/claude-cowork-linux.git"
-    "https://github.com/johnzfitch/claude-cowork-linux/releases/download/v3.0.0/${_rnet_wheel}"
+    "https://github.com/johnzfitch/claude-cowork-linux/releases/download/v3.0.1/${_rnet_wheel}"
 )
 sha256sums=(
     'SKIP'
