@@ -188,6 +188,15 @@ bash <(curl -fsSL https://raw.githubusercontent.com/johnzfitch/claude-cowork-lin
 
 ---
 
+## Contributors
+
+Thanks to the community members whose work landed in this release:
+
+- **[@Boermt-die-Buse](https://github.com/Boermt-die-Buse)** &mdash; Linux UI fixes: native window frames, titlebar patch, icon extraction ([PR&nbsp;#29](https://github.com/johnzfitch/claude-cowork-linux/pull/29))
+- **[@JaPossert](https://github.com/JaPossert)** &mdash; Resources copy fix preventing startup crash ([PR&nbsp;#27](https://github.com/johnzfitch/claude-cowork-linux/pull/27)), Wayland global shortcuts report ([#28](https://github.com/johnzfitch/claude-cowork-linux/issues/28))
+
+---
+
 <div align="center">
 
 **[Full diff](https://github.com/johnzfitch/claude-cowork-linux/compare/v3.0.1...v3.0.2)** &middot; **[README](https://github.com/johnzfitch/claude-cowork-linux#readme)** &middot; **[Issues](https://github.com/johnzfitch/claude-cowork-linux/issues)**
