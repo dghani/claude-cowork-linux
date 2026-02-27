@@ -833,19 +833,12 @@ class SwiftAddonStub extends EventEmitter {
           trace('Skipping mount symlink creation: sessionName=' + sessionName + ', hasAdditionalMounts=' + !!additionalMounts);
         }
 
-        // SECURITY: Validate command is the expected Claude binary
-        let hostCommand = command;
-        if (command === '/usr/local/bin/claude') {
-          hostCommand = resolveClaudeBinaryPath();
-          trace('Translated command: ' + command + ' -> ' + hostCommand);
-        } else {
-          // SECURITY: Only allow the expected command
-          trace('SECURITY: Unexpected command blocked: ' + command);
-          if (self._onError) self._onError(id, 'Unexpected command: ' + command, '');
-          return { success: false, error: 'Unexpected command' };
-        }
-
-        // SECURITY: Verify binary exists and is in expected location
+        // SECURITY: Validate and normalize command to the resolved binary.
+        // The asar typically sends /usr/local/bin/claude (the macOS VM path),
+        // but future versions or distro configs may send 'claude' bare or an
+        // absolute path that already exists.  All accepted forms are funneled
+        // through resolveClaudeBinaryPath() so the actual binary on this host
+        // is always what runs.
         const home = os.homedir();
         const allowedPrefixes = [
           path.join(APP_SUPPORT_ROOT, 'claude-code-vm'),
@@ -855,6 +848,38 @@ class SwiftAddonStub extends EventEmitter {
           '/usr/local/bin/',
           '/usr/bin/',
         ];
+
+        const normalizedCommand = (typeof command === 'string' || command instanceof String)
+          ? String(command).trim()
+          : '';
+        const commandBasename = normalizedCommand ? path.basename(normalizedCommand) : '';
+
+        let hostCommand;
+        if (
+          normalizedCommand === '/usr/local/bin/claude' ||
+          normalizedCommand === 'claude' ||
+          commandBasename === 'claude'
+        ) {
+          // Standard paths -- resolve to the real host binary
+          hostCommand = resolveClaudeBinaryPath();
+          trace('Translated command: ' + normalizedCommand + ' -> ' + hostCommand);
+        } else if (allowedPrefixes.some(prefix => normalizedCommand.startsWith(prefix))) {
+          // Already an allowed absolute path -- verify it exists, else resolve
+          if (fs.existsSync(normalizedCommand)) {
+            hostCommand = normalizedCommand;
+            trace('Command is an allowed absolute path: ' + normalizedCommand);
+          } else {
+            hostCommand = resolveClaudeBinaryPath();
+            trace('Allowed absolute path missing, resolved: ' + normalizedCommand + ' -> ' + hostCommand);
+          }
+        } else {
+          // SECURITY: Reject anything outside the allowlist
+          trace('SECURITY: Unexpected command blocked: "' + String(command) + '" (type=' + typeof command + ')');
+          if (self._onError) self._onError(id, 'Unexpected command: ' + String(command), '');
+          return { success: false, error: 'Unexpected command' };
+        }
+
+        // SECURITY: Verify resolved binary is in expected location
         const commandIsAllowed = hostCommand === 'claude' ||
           allowedPrefixes.some(prefix => hostCommand.startsWith(prefix));
         if (!commandIsAllowed) {

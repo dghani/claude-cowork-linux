@@ -41,6 +41,28 @@ Claude Cowork is a special Claude Desktop build that works inside a folder you p
 
 ---
 
+## ![](.github/assets/icons/platform-24x24.png) Compatibility
+
+| Distro | Desktop | Status | Notes |
+|:-------|:--------|:-------|:------|
+| **Arch Linux** | Hyprland (Wayland) | Tested | Primary dev environment |
+| **Arch Linux** | KDE Plasma (Wayland) | Expected | KDE Wallet exposed via SecretService D-Bus |
+| **Arch Linux** | GNOME (Wayland) | Expected | Global shortcuts portal not implemented by GNOME yet |
+| **Ubuntu 22.04+** | GNOME / X11 | Expected | gnome-keyring provides SecretService |
+| **Fedora 39+** | GNOME / KDE | Expected | May need `p7zip-plugins` for DMG extraction |
+| **Debian 12+** | Any | Expected | `p7zip-full` in apt |
+| **NixOS** | Any | Untested | Electron + bwrap sandboxing may need extra config |
+| **openSUSE** | Any | Untested | zypper path supported by installer |
+
+**Known caveats:**
+- Wayland compositors that don't implement the `GlobalShortcuts` portal (GNOME) won't have global hotkey support -- set a custom shortcut in your DE settings instead.
+- If `gnome-keyring` or another SecretService provider isn't running, the launcher falls back to `--password-store=basic` (credentials stored on disk, not in a keyring).
+- The `/sessions` root symlink requires `sudo` once during install. If your distro restricts root symlinks differently, point it manually: `sudo ln -s ~/.local/share/claude-cowork/sessions /sessions`.
+
+Run `./install.sh --doctor` (or `claude-desktop --doctor`) after install to validate your environment.
+
+---
+
 ## ![](.github/assets/icons/checkbox-24x24.png) Requirements
 
 - **Linux x86_64** (tested on Arch Linux, kernel 6.18.7)

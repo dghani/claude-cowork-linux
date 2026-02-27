@@ -113,12 +113,25 @@ fi
 # Create log directory
 mkdir -p ~/.local/share/claude-cowork/logs
 
+# Detect password store backend.
+# gnome-libsecret is preferred (works with gnome-keyring, KeePassXC, KDE Wallet
+# via the freedesktop SecretService D-Bus interface).  Fall back to basic if
+# the SecretService bus name isn't claimed -- avoids hard failures on minimal
+# desktops or headless setups.
+PASSWORD_STORE="gnome-libsecret"
+if ! dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+     org.freedesktop.DBus.NameHasOwner string:"org.freedesktop.secrets" 2>/dev/null \
+     | grep -q "boolean true"; then
+  echo "WARN: org.freedesktop.secrets not available, falling back to --password-store=basic"
+  PASSWORD_STORE="basic"
+fi
+
 # Run electron with the repacked app.asar
-echo "Launching Claude Desktop (electron: $ELECTRON_BIN)..."
+echo "Launching Claude Desktop (electron: $ELECTRON_BIN, password-store: $PASSWORD_STORE)..."
 exec "$ELECTRON_BIN" \
   "./${ASAR_FILE}" \
   --no-sandbox \
-  --password-store=gnome-libsecret \
+  --password-store="$PASSWORD_STORE" \
   --enable-features=GlobalShortcutsPortal \
   "$@" \
   2>&1 | tee -a ~/.local/share/claude-cowork/logs/startup.log

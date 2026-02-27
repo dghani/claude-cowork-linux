@@ -431,6 +431,7 @@ cd "\$COWORK_DIR"
 case "\${1:-}" in
     --devtools) shift; exec ./test-launch-devtools.sh "\$@" 2>&1 | tee -a "\$LOG_DIR/startup.log" ;;
     --debug)    shift; export CLAUDE_TRACE=1; exec ./test-launch.sh "\$@" 2>&1 | tee -a "\$LOG_DIR/startup.log" ;;
+    --doctor)   exec ./install.sh --doctor ;;
     *)          exec ./test-launch.sh "\$@" 2>&1 | tee -a "\$LOG_DIR/startup.log" ;;
 esac
 EOF
@@ -502,10 +503,158 @@ EOF
 }
 
 # ============================================================
+# Doctor: preflight validation
+# ============================================================
+
+doctor() {
+    echo ""
+    echo "=========================================="
+    echo " Claude Desktop for Linux - Doctor"
+    echo " Version: $VERSION"
+    echo "=========================================="
+    echo ""
+
+    local ok=0 warn=0 fail=0
+
+    # --- Required binaries ---
+    for cmd in git 7z node npm electron asar bwrap; do
+        if command_exists "$cmd"; then
+            log_success "$cmd: $(command -v "$cmd")"
+            ok=$((ok + 1))
+        else
+            log_error "$cmd: NOT FOUND"
+            fail=$((fail + 1))
+        fi
+    done
+
+    # --- Node.js version ---
+    if command_exists node; then
+        local node_ver
+        node_ver=$(node --version | sed 's/v//' | cut -d. -f1)
+        if [[ "$node_ver" -ge 18 ]]; then
+            log_success "Node.js version: v$node_ver (>= 18)"
+            ok=$((ok + 1))
+        else
+            log_error "Node.js version: v$node_ver (need >= 18)"
+            fail=$((fail + 1))
+        fi
+    fi
+
+    # --- Claude Code CLI ---
+    local claude_found=""
+    for p in \
+        "$HOME/.local/bin/claude" \
+        "$HOME/.npm-global/bin/claude" \
+        "/usr/local/bin/claude" \
+        "/usr/bin/claude"; do
+        if [[ -x "$p" ]]; then
+            claude_found="$p"
+            break
+        fi
+    done
+    # Also check claude-code-vm
+    local vm_root="$HOME/Library/Application Support/Claude/claude-code-vm"
+    if [[ -z "$claude_found" && -d "$vm_root" ]]; then
+        claude_found=$(find "$vm_root" -name claude -type f -executable 2>/dev/null | head -1)
+    fi
+    if [[ -n "$claude_found" ]]; then
+        log_success "Claude binary: $claude_found"
+        ok=$((ok + 1))
+    else
+        log_warn "Claude binary: not found (Cowork will download it on first run)"
+        warn=$((warn + 1))
+    fi
+
+    # --- /sessions symlink ---
+    if [[ -L /sessions ]]; then
+        local target
+        target=$(readlink /sessions)
+        log_success "/sessions symlink -> $target"
+        ok=$((ok + 1))
+    elif [[ -d /sessions ]]; then
+        log_warn "/sessions exists but is a directory (should be a symlink)"
+        warn=$((warn + 1))
+    else
+        log_error "/sessions: NOT FOUND -- run: sudo ln -s ~/.local/share/claude-cowork/sessions /sessions"
+        fail=$((fail + 1))
+    fi
+
+    # --- Secret service (D-Bus) ---
+    if dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+         org.freedesktop.DBus.NameHasOwner string:"org.freedesktop.secrets" 2>/dev/null \
+         | grep -q "boolean true"; then
+        log_success "Secret service (org.freedesktop.secrets): available"
+        ok=$((ok + 1))
+    else
+        log_warn "Secret service: not available (will fall back to basic password store)"
+        warn=$((warn + 1))
+    fi
+
+    # --- Extracted app ---
+    local app_dir="${INSTALL_DIR}/linux-app-extracted"
+    if [[ -d "$app_dir/.vite/build" ]]; then
+        log_success "Extracted app: $app_dir"
+        ok=$((ok + 1))
+        # Check cowork patch
+        if grep -q 'cowork-patched' "$app_dir/.vite/build/index.js" 2>/dev/null; then
+            log_success "Cowork patch: applied"
+            ok=$((ok + 1))
+        else
+            log_warn "Cowork patch: not applied (run install.sh to apply)"
+            warn=$((warn + 1))
+        fi
+        # Check stubs
+        if [[ -f "$app_dir/node_modules/@ant/claude-swift/js/index.js" ]]; then
+            log_success "Swift stub: installed"
+            ok=$((ok + 1))
+        else
+            log_error "Swift stub: MISSING"
+            fail=$((fail + 1))
+        fi
+    else
+        log_warn "Extracted app: not found at $app_dir (run install.sh)"
+        warn=$((warn + 1))
+    fi
+
+    # --- Python ---
+    if command_exists python3; then
+        local py_ver
+        py_ver=$(python3 --version 2>&1 | awk '{print $2}')
+        log_success "Python: $py_ver"
+        ok=$((ok + 1))
+    else
+        log_warn "Python 3: not found (needed for auto-download and patches)"
+        warn=$((warn + 1))
+    fi
+
+    echo ""
+    echo "=========================================="
+    echo -e " ${GREEN}$ok passed${NC}  ${YELLOW}$warn warnings${NC}  ${RED}$fail failed${NC}"
+    echo "=========================================="
+    echo ""
+    if [[ $fail -gt 0 ]]; then
+        echo "Fix the failures above, then re-run: ./install.sh --doctor"
+        return 1
+    elif [[ $warn -gt 0 ]]; then
+        echo "Warnings are non-fatal but may affect some features."
+        return 0
+    else
+        echo "Everything looks good."
+        return 0
+    fi
+}
+
+# ============================================================
 # Main
 # ============================================================
 
 main() {
+    # Handle --doctor flag
+    if [[ "${1:-}" == "--doctor" ]]; then
+        doctor
+        exit $?
+    fi
+
     # Positional arg → CLAUDE_DMG
     if [[ -n "${1:-}" && -z "${CLAUDE_DMG:-}" ]]; then
         export CLAUDE_DMG="$1"
@@ -555,6 +704,11 @@ main() {
     setup_environment
     echo ""
 
+    # Step 9: Preflight validation
+    log_info "Running post-install checks..."
+    doctor || true
+    echo ""
+
     # Done
     echo "=========================================="
     echo -e "${GREEN} Installation Complete!${NC}"
@@ -566,6 +720,7 @@ main() {
     echo "Options:"
     echo "  claude-desktop --debug      Enable trace logging"
     echo "  claude-desktop --devtools   Open with DevTools"
+    echo "  claude-desktop --doctor     Run preflight diagnostics"
     echo ""
     echo "Update:"
     echo "  cd $INSTALL_DIR && git pull"
