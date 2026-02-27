@@ -37,7 +37,7 @@ Claude Cowork is a special Claude Desktop build that works inside a folder you p
 
 - **Unofficial research preview**: This is reverse-engineered and may break when Claude Desktop updates.
 - **Linux support**: Currently targets **Linux x86_64**. Wayland: auto-detected via `$WAYLAND_DISPLAY` / `$XDG_SESSION_TYPE` (Ozone backend).
-- **Access**: Requires your own Claude Desktop DMG and an account with Cowork enabled.
+- **Access**: Requires a Claude account with Cowork enabled (Max subscription). The installer auto-downloads the Claude Desktop DMG; no macOS machine needed.
 
 ---
 
@@ -66,10 +66,14 @@ Run `./install.sh --doctor` (or `claude-desktop --doctor`) after install to vali
 ## ![](.github/assets/icons/checkbox-24x24.png) Requirements
 
 - **Linux x86_64** (tested on Arch Linux, kernel 6.18.7)
-- **Node.js / npm** (for Electron)
+- **Node.js 18+** / npm
+- **Electron** (system package or npm global)
+- **asar** (`npm install -g @electron/asar`)
 - **p7zip** (to extract the macOS DMG)
+- **bubblewrap** (sandbox isolation)
 - **Python 3.11+** (for auto-download and patches)
 - **Claude Max subscription** for Cowork access
+- **Secret service provider** (optional) -- gnome-keyring, KDE Wallet, or KeePassXC for secure credential storage. Without one, the launcher falls back to `--password-store=basic`.
 
 ---
 
@@ -132,7 +136,7 @@ CLAUDE_DMG=~/Downloads/Claude-1.1.4010.dmg ./install.sh
 │  └── Platform helpers → Minimal compatibility shims             │
 ├─────────────────────────────────────────────────────────────────┤
 │  Claude Code Binary                                             │
-│  └── ~/.config/Claude/claude-code-vm/{version}/claude (ELF x86_64) │
+│  └── ~/.local/bin/claude or ~/.config/Claude/claude-code-vm/*/claude │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -142,7 +146,7 @@ The stub translates VM paths to host paths:
 
 | VM Path | Host Path |
 |:--------|:----------|
-| `/usr/local/bin/claude` | `~/.config/Claude/claude-code-vm/2.1.5/claude` |
+| `/usr/local/bin/claude` or `claude` | Resolved via `~/.local/bin/claude`, `~/.config/Claude/claude-code-vm/{version}/claude`, or PATH |
 | `/sessions/...` | `~/.local/share/claude-cowork/sessions/...` |
 
 ### Mount Symlinks
@@ -213,9 +217,14 @@ The app also expects `@ant/claude-native` (a macOS-specific native module). Our 
 
 On macOS, Cowork runs a Linux VM. On Linux, we skip the VM entirely and run the Claude Code binary directly on the host. This is actually simpler and faster!
 
-The binary is a Bun-compiled executable at:
+The stub resolves the binary in priority order:
 ```
-~/.config/Claude/claude-code-vm/{version}/claude
+~/.config/Claude/claude-code-vm/{version}/claude    (downloaded by Desktop)
+$CLAUDE_CODE_PATH                                    (explicit override)
+~/.local/bin/claude                                  (npm/bun global)
+~/.npm-global/bin/claude
+/usr/local/bin/claude
+/usr/bin/claude
 ```
 
 </details>
@@ -235,20 +244,22 @@ claude-cowork-linux/
 ├── cowork/
 │   ├── event_dispatch.js               # EIPC event dispatch for LocalAgentModeSessions
 │   └── sdk_bridge.js                   # SDK bridge (spawn dead code, kept for session state)
+├── tools/
+│   └── fetch-dmg.py                    # Auto-download Claude DMG via rnet (Cloudflare bypass)
+├── patches/
+│   └── enable-cowork.py                # Patches platform gate to return {status:"supported"}
 ├── docs/
 │   ├── extensions.md                   # MCP and Chrome Extension integration overview
 │   ├── known-issues.md                 # Safe Storage encryption, keyring setup
 │   └── safestorage-tokens.md           # How to persist tokens across restarts
 ├── config/
 │   └── hyprland/claude.conf            # Optional: Hyprland window rules
-├── patches/
-│   └── enable-cowork.py               # Patches platform gate to return {status:"supported"}
 ├── .github/assets/                     # README icons and hero image
 ├── linux-loader.js                     # Entry point: platform spoofing, IPC setup, session lifecycle
-├── install.sh                          # One-click installer: downloads DMG, deploys stubs
-├── test-launch.sh                      # Dev launcher: repacks asar, runs AppImage electron
+├── install.sh                          # Installer + --doctor preflight diagnostics
+├── test-launch.sh                      # Dev launcher: repacks asar, detects password store, runs electron
 ├── test-launch-devtools.sh             # Dev launcher with --inspect (Node.js DevTools)
-├── test-flow.sh                        # Pre-flight checks: env vars, stub URLs, log scanning
+├── test-flow.sh                        # Env var checks, stub URL validation, log scanning
 ├── PKGBUILD                            # Arch Linux AUR package definition
 ├── OAUTH-COMPLIANCE.md                 # OAuth token handling audit
 ├── CLAUDE.md                           # Project guide and critical paths
@@ -265,7 +276,7 @@ After running `install.sh`, the `linux-app-extracted/` directory will contain th
 If the automated installer doesn't work, follow these steps:
 
 <details>
-<parameter name="summary"><strong>1. Extract Claude Desktop from DMG</strong></summary>
+<summary><strong>1. Extract Claude Desktop from DMG</strong></summary>
 
 The installer handles `app.asar` extraction automatically. For manual extraction or older unpacked versions:
 
@@ -329,11 +340,14 @@ sudo ln -s ~/.local/share/claude-cowork/sessions /sessions
 </details>
 
 <details>
-<summary><strong>5. Install Electron</strong></summary>
+<summary><strong>5. Install Electron and asar</strong></summary>
 
 ```bash
-npm init -y
-npm install electron
+# System package (preferred)
+# Arch: pacman -S electron
+# Ubuntu/Debian: apt install electron
+# Or via npm:
+npm install -g electron @electron/asar
 ```
 
 </details>
@@ -381,10 +395,10 @@ cat ~/.local/share/claude-cowork/logs/claude-swift-trace.log
 <details>
 <summary><strong>Failed to start Claude's workspace</strong></summary>
 
-Check that:
+Run `claude-desktop --doctor` first to check your environment. Then verify:
 
 1. The swift stub is properly loaded (check for `[claude-swift-stub] LOADING MODULE` in logs)
-2. The Claude binary exists at `~/.config/Claude/claude-code-vm/{version}/claude`
+2. The Claude binary exists at one of the resolved paths (`~/.local/bin/claude`, `~/.config/Claude/claude-code-vm/{version}/claude`, etc.)
 3. You have Cowork enabled on your account (Max subscription)
 
 </details>
@@ -431,7 +445,8 @@ The app enables `GlobalShortcutsPortal` for Wayland global shortcut support via 
 ```bash
 ./test-launch.sh              # repacks asar automatically if stubs changed
 ./test-launch-devtools.sh     # with Node.js inspector
-./test-flow.sh                # pre-flight: env, stub URLs, log errors
+./test-flow.sh                # env var checks, stub URL validation, log errors
+./install.sh --doctor         # preflight: binaries, node, CLI, /sessions, secret service, patches
 ```
 
 ### Debug Logging
@@ -476,8 +491,9 @@ The stub writes to `~/.local/share/claude-cowork/logs/claude-swift-trace.log`:
 
 This project includes security hardening:
 
+- **Command allowlist** - Only vetted binary paths are accepted by `vm.spawn()`; unknown commands are rejected
 - **Command injection prevention** - Uses `execFile()` instead of `exec()`
-- **Path traversal protection** - Validates session paths
+- **Path traversal protection** - Validates session paths with `isPathSafe()`
 - **Environment filtering** - Allowlist of safe environment variables
 - **Secure permissions** - Session directory uses 700, not 777
 - **Symlink for /sessions** - No world-writable directories
@@ -500,6 +516,10 @@ This project includes security hardening:
 ## Credits
 
 Reverse engineered and implemented by examining the Claude Desktop Electron app structure, binary analysis with pyghidra-lite, and iterative debugging.
+
+**Contributors:**
+- [@Boermt-die-Buse](https://github.com/Boermt-die-Buse) -- Linux UI fixes: native window frames, titlebar patch, icon extraction
+- [@JaPossert](https://github.com/JaPossert) -- Resources copy fix, Wayland global shortcuts report
 
 ---
 
