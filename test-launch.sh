@@ -108,6 +108,9 @@ export ELECTRON_ENABLE_LOGGING=1
 if [[ -n "$WAYLAND_DISPLAY" ]] || [[ "$XDG_SESSION_TYPE" == "wayland" ]]; then
   export ELECTRON_OZONE_PLATFORM_HINT=wayland
   echo "Wayland detected, using Ozone platform"
+  if [[ "$XDG_CURRENT_DESKTOP" == *"GNOME"* ]]; then
+    echo "NOTE: GNOME Wayland does not support the GlobalShortcuts portal — configure shortcuts via GNOME Settings instead"
+  fi
 fi
 
 # Create log directory

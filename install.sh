@@ -100,7 +100,7 @@ install_dependencies() {
             apt) sudo apt-get update -qq && sudo apt-get install -y git p7zip-full nodejs npm bubblewrap ;;
             pacman) sudo pacman -S --noconfirm --needed git p7zip nodejs npm bubblewrap ;;
             dnf) sudo dnf install -y git p7zip nodejs npm bubblewrap ;;
-            zypper) sudo zypper install -y git p7zip nodejs npm bubblewrap ;;
+            zypper) sudo zypper install -y git 7zip nodejs-default bubblewrap ;;
             nix) nix-env -iA nixpkgs.git nixpkgs.p7zip nixpkgs.nodejs nixpkgs.bubblewrap ;;
             *) die "Unknown package manager. Install manually: git p7zip nodejs npm bubblewrap" ;;
         esac
@@ -312,9 +312,14 @@ extract_dmg() {
     local extract_dir="$WORK_DIR/extract"
     local seven_z_exit=0
     7z x -y -o"$extract_dir" "$dmg_path" >/dev/null 2>&1 || seven_z_exit=$?
-    # 7z exit 1 = warning (e.g. "Dangerous link path" for /Applications symlink)
-    if [[ $seven_z_exit -gt 1 ]]; then
+    # 7z exit 1 = warning, exit 2 = "Dangerous link path" (e.g. /Applications symlink
+    # in DMG). Both are non-fatal on Linux — the symlink is macOS-specific.
+    # See: https://github.com/johnzfitch/claude-cowork-linux/issues/35
+    if [[ $seven_z_exit -gt 2 ]]; then
         die "Failed to extract DMG (7z exit code: $seven_z_exit)"
+    fi
+    if [[ $seven_z_exit -eq 1 || $seven_z_exit -eq 2 ]]; then
+        log_warn "7z exited with code $seven_z_exit (non-fatal; e.g. skipped macOS symlinks)"
     fi
 
     # Find Claude.app and app.asar
@@ -352,9 +357,16 @@ extract_dmg() {
     done
 
     # The app expects i18n JSON files at resources/i18n/*.json (not resources/*.json)
+    mkdir -p "$target_dir/resources/i18n"
     if ls "$target_dir/resources"/*.json >/dev/null 2>&1; then
-        mkdir -p "$target_dir/resources/i18n"
         mv "$target_dir/resources"/*.json "$target_dir/resources/i18n/"
+    fi
+
+    # Validate that i18n files were extracted — missing files cause ENOENT at startup.
+    # See: https://github.com/johnzfitch/claude-cowork-linux/issues/33
+    if ! ls "$target_dir/resources/i18n"/*.json >/dev/null 2>&1; then
+        log_warn "No i18n JSON files found in resources/i18n/ — the app may fail to start"
+        log_warn "Try re-running the installer with a fresh DMG download"
     fi
 
     log_success "Extracted app to linux-app-extracted/"

@@ -47,12 +47,12 @@ Claude Cowork is a special Claude Desktop build that works inside a folder you p
 |:-------|:--------|:-------|:------|
 | **Arch Linux** | Hyprland (Wayland) | Tested | Primary dev environment |
 | **Arch Linux** | KDE Plasma (Wayland) | Expected | KDE Wallet exposed via SecretService D-Bus |
-| **Arch Linux** | GNOME (Wayland) | Expected | Global shortcuts portal not implemented by GNOME yet |
+| **Arch Linux** | GNOME (Wayland) | Expected | Global shortcuts require manual DE config (GNOME lacks portal support) |
 | **Ubuntu 22.04+** | GNOME / X11 | Expected | gnome-keyring provides SecretService |
 | **Fedora 39+** | GNOME / KDE | Expected | May need `p7zip-plugins` for DMG extraction |
 | **Debian 12+** | Any | Expected | `p7zip-full` in apt |
 | **NixOS** | Any | Untested | Electron + bwrap sandboxing may need extra config |
-| **openSUSE** | Any | Untested | zypper path supported by installer |
+| **openSUSE** | Any | Tested | Uses `7zip` package (not `p7zip`); `nodejs-default` for Node.js |
 
 **Known caveats:**
 - Wayland compositors that don't implement the `GlobalShortcuts` portal (GNOME) won't have global hotkey support -- set a custom shortcut in your DE settings instead.
@@ -69,10 +69,10 @@ Run `./install.sh --doctor` (or `claude-desktop --doctor`) after install to vali
 - **Node.js 18+** / npm
 - **Electron** (system package or npm global)
 - **asar** (`npm install -g @electron/asar`)
-- **p7zip** (to extract the macOS DMG)
+- **p7zip** (to extract the macOS DMG; openSUSE uses `7zip` instead)
 - **bubblewrap** (sandbox isolation)
 - **Python 3.11+** (for auto-download and patches)
-- **Claude account** for Cowork access
+- **Claude Pro** (or higher) subscription for Cowork access
 - **Secret service provider** (optional) -- gnome-keyring, KDE Wallet, or KeePassXC for secure credential storage. Without one, the launcher falls back to `--password-store=basic`.
 
 ---

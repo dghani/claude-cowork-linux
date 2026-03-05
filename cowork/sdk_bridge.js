@@ -12,6 +12,7 @@
 
 const { spawn } = require("child_process");
 const crypto = require("crypto");
+const os = require("os");
 const path = require("path");
 const fs = require("fs");
 
@@ -64,7 +65,7 @@ function filterEnvForSubprocess(baseEnv, extra) {
 
 function resolveClaudeCodeCommand() {
   if (process.env.CLAUDE_CODE_PATH) return process.env.CLAUDE_CODE_PATH;
-  const home = process.env.HOME || "/home/zack";
+  const home = process.env.HOME || os.homedir();
   const candidates = [
     path.join(home, ".npm-global/bin/claude"),
     path.join(home, ".local/bin/claude"),

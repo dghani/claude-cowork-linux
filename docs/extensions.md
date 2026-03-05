@@ -63,7 +63,7 @@ Find more at: https://github.com/modelcontextprotocol/servers
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "/home/zack/projects/myapp"
+        "/home/user/projects/myapp"
       ]
     }
   }
@@ -96,7 +96,7 @@ You'll see this warning in the logs - it's **harmless**:
 
 ```
 [Chrome Extension MCP] Skipping native host setup: binary not found at
-/home/zack/dev/packages/desktop/chrome-native-host/artifacts/chrome-native-host
+/home/user/dev/packages/desktop/chrome-native-host/artifacts/chrome-native-host
 ```
 
 This is expected and the app works fine without it.
@@ -174,7 +174,7 @@ The Chrome Extension integration is a nice-to-have but not essential for most wo
   "mcpServers": {
     "workspace": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/zack/workspace"]
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/workspace"]
     }
   }
 }

@@ -205,6 +205,12 @@ function resolveClaudeBinaryPath() {
     path.join(home, '.npm-global/bin/claude'),
     '/usr/local/bin/claude',
     '/usr/bin/claude',
+    // Linuxbrew
+    '/home/linuxbrew/.linuxbrew/bin/claude',
+    path.join(home, '.linuxbrew/bin/claude'),
+    // Version managers (mise, asdf)
+    path.join(home, '.local/share/mise/shims/claude'),
+    path.join(home, '.asdf/shims/claude'),
   ];
   for (const candidate of linuxCandidates) {
     try {
