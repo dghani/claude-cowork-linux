@@ -484,7 +484,17 @@ class SwiftAddonStub extends EventEmitter {
       isVisible: () => false,
       submit: (data) => {
         console.log('[claude-swift] quickAccess.submit()', data);
-      }
+      },
+      overlay: {
+        show: () => { trace('quickAccess.overlay.show()'); },
+        hide: () => { trace('quickAccess.overlay.hide()'); },
+        isVisible: () => false,
+      },
+      dictation: {
+        start: () => { trace('quickAccess.dictation.start()'); },
+        stop: () => { trace('quickAccess.dictation.stop()'); },
+        isActive: () => false,
+      },
     };
 
     // Notifications
@@ -718,7 +728,11 @@ class SwiftAddonStub extends EventEmitter {
     };
 
     // API object (general purpose)
-    this.api = {};
+    this.api = {
+      setCredentials: (creds) => {
+        trace('api.setCredentials() called');
+      },
+    };
 
     // Midnight Owl (scheduling/time-based features)
     this.midnightOwl = {

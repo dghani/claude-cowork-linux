@@ -100,7 +100,7 @@ install_dependencies() {
             apt) sudo apt-get update -qq && sudo apt-get install -y git p7zip-full nodejs npm bubblewrap ;;
             pacman) sudo pacman -S --noconfirm --needed git p7zip nodejs npm bubblewrap ;;
             dnf) sudo dnf install -y git p7zip nodejs npm bubblewrap ;;
-            zypper) sudo zypper install -y git 7zip nodejs-default bubblewrap ;;
+            zypper) sudo zypper install -y git 7zip nodejs-default npm bubblewrap ;;
             nix) nix-env -iA nixpkgs.git nixpkgs.p7zip nixpkgs.nodejs nixpkgs.bubblewrap ;;
             *) die "Unknown package manager. Install manually: git p7zip nodejs npm bubblewrap" ;;
         esac
