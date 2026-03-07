@@ -1,7 +1,7 @@
 # OAuth Compliance & Token Handling — Addendum
 
 > **Applicable to**: Claude Cowork for Linux (unofficial compatibility layer)
-> **Last updated**: 2026-02-22
+> **Last updated**: 2026-03-07
 > **Goal**: Full OAuth handling stays in unmodified Anthropic applications (Claude Desktop + Claude Code)
 
 ---
@@ -82,7 +82,7 @@ outside Anthropic's officially supported configurations.
 
 ### 1. `addApprovedOauthToken` — Token Deliberately Discarded
 
-**File**: `stubs/@ant/claude-swift/js/index.js` (lines 1011-1035)
+**File**: `stubs/@ant/claude-swift/js/index.js` (lines 1118-1120)
 
 **What the official macOS version does**: Stores the OAuth token inside the sandboxed VM so Claude Code can use the consumer plan's credentials.
 
@@ -105,7 +105,7 @@ addApprovedOauthToken: async (_token) => {
 
 ### 2. `filterEnv` — Credential-Bearing Env Vars Filtered, With Explicit Exemption
 
-**File**: `stubs/@ant/claude-swift/js/index.js` (lines 99-132)
+**File**: `stubs/@ant/claude-swift/js/index.js` (lines 107-132)
 
 **Risk**: The Claude Desktop renderer passes `additionalEnv` vars when spawning processes.
 If any of these contain OAuth tokens, naive code would forward them blindly.
@@ -146,7 +146,7 @@ const CREDENTIAL_EXEMPT_KEYS = new Set(['CLAUDE_CODE_OAUTH_TOKEN']);
 
 ### 3. SDK Bridge Environment — Allowlist Replaces Full Spread
 
-**File**: `cowork/sdk_bridge.js` (lines 19-54, 318-323)
+**File**: `cowork/sdk_bridge.js` (lines 30-54, ~367)
 
 **Risk**: The SDK bridge previously copied the entire `process.env` to subprocesses:
 ```javascript
@@ -176,7 +176,7 @@ The `SDK_ENV_ALLOWLIST` contains only system variables, display variables, and C
 
 ### 4. `AuthRequest` — Browser-Only, No Callback Handling
 
-**File**: `stubs/@ant/claude-native/index.js` (lines 154-199)
+**File**: `stubs/@ant/claude-native/index.js` (lines 178-220)
 
 **What it does**:
 - `start(url)` → Opens `url` in the system browser via `xdg-open`
@@ -192,18 +192,7 @@ The `SDK_ENV_ALLOWLIST` contains only system variables, display variables, and C
 
 `isAvailable() → false` tells the renderer that no native auth window exists, so the renderer handles the entire OAuth flow (including the callback) through its own built-in logic — code we do not modify.
 
-**How this meets expectations**:
-- Our code is functionally equivalent to the user clicking a link in their browser
-- The OAuth callback goes directly to the unmodified Claude Desktop renderer
-- This stub is purely a browser-opener; it cannot intercept any credentials
-
----
-
-### 5. `Auth_$_doAuthInBrowser` — Origin-Validated Browser Open
-
-**File**: `stubs/@ant/claude-native/index.js` (lines 185-194)
-
-**What it does**: Opens the OAuth URL in the user's default browser. The URL is validated against an allowlist of Anthropic domains before being opened.
+Origin validation is enforced inside `start()` via `ALLOWED_AUTH_ORIGINS` (lines 185–194):
 
 ```javascript
 const ALLOWED_AUTH_ORIGINS = [
@@ -215,14 +204,15 @@ const ALLOWED_AUTH_ORIGINS = [
 ```
 
 **How this meets expectations**:
+- Our code is functionally equivalent to the user clicking a link in their browser
 - Only Anthropic-owned domains can be opened through this handler
 - Uses `execFile` (not `exec`) to prevent command injection
-- The handler returns `{ success: true }` after opening the browser — it never receives or processes any token
-- Even if a malicious script tried to abuse this IPC channel, it could only open Anthropic URLs
+- The OAuth callback goes directly to the unmodified Claude Desktop renderer
+- This stub is purely a browser-opener; it cannot intercept any credentials
 
 ---
 
-### 6. `redactForLogs` — Defense-in-Depth Log Sanitization
+### 5. `redactForLogs` — Defense-in-Depth Log Sanitization
 
 **File**: `stubs/@ant/claude-swift/js/index.js` (lines 54-74)
 
@@ -277,21 +267,18 @@ Even though our stubs don't handle tokens, trace logs could theoretically captur
 To verify these claims, audit the following specific locations:
 
 ```bash
-# 1. Confirm addApprovedOauthToken is a no-op (token param named _token, never used)
+# 1. Confirm addApprovedOauthToken is a no-op (_token param never used)
 grep -n 'addApprovedOauthToken' stubs/@ant/claude-swift/js/index.js
 
-# 2. Confirm filterEnv blocks credential-like keys
-grep -n 'BLOCKED_ENV_KEY_PATTERN' stubs/@ant/claude-swift/js/index.js
+# 2. Confirm filterEnv blocks credential-like keys with explicit exemption for CLI token
+grep -n 'BLOCKED_ENV_KEY_PATTERN\|CREDENTIAL_EXEMPT_KEYS' stubs/@ant/claude-swift/js/index.js
 
-# 3. Confirm SDK bridge uses allowlist, not ...process.env
-grep -n 'filterEnvForSubprocess\|process\.env' cowork/sdk_bridge.js
+# 3. Confirm SDK bridge uses allowlist, not ...process.env spread
+grep -n 'filterEnvForSubprocess\|SDK_ENV_ALLOWLIST' cowork/sdk_bridge.js
 
-# 4. Confirm AuthRequest never handles callbacks
-grep -n 'isAvailable\|callback\|token' stubs/@ant/claude-native/index.js
+# 4. Confirm AuthRequest is browser-only: isAvailable→false, ALLOWED_AUTH_ORIGINS enforced
+grep -n 'isAvailable\|ALLOWED_AUTH_ORIGINS' stubs/@ant/claude-native/index.js
 
-# 5. Confirm auth URL origin validation
-grep -n 'ALLOWED_AUTH_ORIGINS' stubs/@ant/claude-native/index.js
-
-# 6. Confirm log redaction is active
+# 5. Confirm log redaction is active
 grep -n 'redactForLogs' stubs/@ant/claude-swift/js/index.js
 ```
