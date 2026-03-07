@@ -1,0 +1,26 @@
+name: Publish to AUR
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - PKGBUILD
+      - .SRCINFO
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v3.0.1
+        with:
+          pkgname: claude-cowork-linux
+          pkgbuild: ./PKGBUILD
+          commit_username: johnzfitch
+          commit_email: zack@johnzfitch.com
+          ssh_private_key: ${{ secrets.AUR_SSH_KEY }}
+          commit_message: "Update to ${{ github.sha }}"
+          force_push: false
