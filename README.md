@@ -57,7 +57,7 @@ Claude Cowork is a special Claude Desktop build that works inside a folder you p
 **Known caveats:**
 - Wayland compositors that don't implement the `GlobalShortcuts` portal (GNOME) won't have global hotkey support -- set a custom shortcut in your DE settings instead.
 - If `gnome-keyring` or another SecretService provider isn't running, the launcher falls back to `--password-store=basic` (credentials stored on disk, not in a keyring).
-- The `/sessions` root symlink requires `sudo` once during install. If your distro restricts root symlinks differently, point it manually: `sudo ln -s ~/.local/share/claude-cowork/sessions /sessions`.
+- The `/sessions` root symlink requires `sudo` once during install. If your distro restricts root symlinks differently, point it manually: `sudo ln -s "$HOME/Library/Application Support/Claude/LocalAgentModeSessions/sessions" /sessions`.
 
 Run `./install.sh --doctor` (or `claude-desktop --doctor`) after install to validate your environment.
 
@@ -147,14 +147,14 @@ The stub translates VM paths to host paths:
 | VM Path | Host Path |
 |:--------|:----------|
 | `/usr/local/bin/claude` or `claude` | Resolved via `~/.local/bin/claude`, `~/.config/Claude/claude-code-vm/{version}/claude`, or PATH |
-| `/sessions/...` | `~/.local/share/claude-cowork/sessions/...` |
+| `/sessions/...` | `~/Library/Application Support/Claude/LocalAgentModeSessions/sessions/...` |
 
 ### Mount Symlinks
 
 When you select a folder in Cowork, the stub creates symlinks to make it accessible at the expected VM path:
 
 ```
-~/.local/share/claude-cowork/sessions/<session-name>/mnt/
+~/Library/Application Support/Claude/LocalAgentModeSessions/sessions/<session-name>/mnt/
 ├── <folder>  → /home/user/path/to/selected/folder (symlink)
 ├── .claude   → ~/.config/Claude/.../session/.claude (symlink)
 ├── .skills   → ~/.config/Claude/.../skills-plugin/... (symlink)
@@ -164,7 +164,7 @@ When you select a folder in Cowork, the stub creates symlinks to make it accessi
 The `additionalMounts` parameter from Claude Desktop provides the mapping between mount names and host paths.
 
 > [!NOTE]
-> The Claude Code binary expects `/sessions` to exist. `install.sh` creates `/sessions` as a symlink into `~/.local/share/claude-cowork/sessions` (requires `sudo` once) so you don't need a world-writable root directory.
+> The Claude Code binary expects `/sessions` to exist. `install.sh` creates `/sessions` as a symlink into `~/Library/Application Support/Claude/LocalAgentModeSessions/sessions` (requires `sudo` once) so you don't need a world-writable root directory.
 
 ---
 
@@ -344,11 +344,11 @@ python3 enable-cowork.py linux-app-extracted/.vite/build/index.js
 
 ```bash
 # Create user session directory
-mkdir -p ~/.local/share/claude-cowork/sessions
-chmod 700 ~/.local/share/claude-cowork/sessions
+mkdir -p "$HOME/Library/Application Support/Claude/LocalAgentModeSessions/sessions"
+chmod 700 "$HOME/Library/Application Support/Claude/LocalAgentModeSessions/sessions"
 
 # Create symlink (requires sudo once)
-sudo ln -s ~/.local/share/claude-cowork/sessions /sessions
+sudo ln -s "$HOME/Library/Application Support/Claude/LocalAgentModeSessions/sessions" /sessions
 ```
 
 </details>
@@ -389,8 +389,8 @@ The patch replaces the platform-gate function to return `{status:"supported"}` u
 Create a symlink to user space instead of a world-writable directory:
 
 ```bash
-mkdir -p ~/.local/share/claude-cowork/sessions
-sudo ln -s ~/.local/share/claude-cowork/sessions /sessions
+mkdir -p "$HOME/Library/Application Support/Claude/LocalAgentModeSessions/sessions"
+sudo ln -s "$HOME/Library/Application Support/Claude/LocalAgentModeSessions/sessions" /sessions
 ```
 
 </details>

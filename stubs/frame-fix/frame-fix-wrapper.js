@@ -19,6 +19,8 @@ const REAL_ARCH = process.arch;
 const vmBundleDir = path.join(os.homedir(), '.config/Claude/vm_bundles');
 const vmTmpDir = path.join(vmBundleDir, 'tmp');
 const claudeVmBundle = path.join(vmBundleDir, 'claudevm.bundle');
+const APP_SUPPORT_ROOT = path.join(os.homedir(), 'Library', 'Application Support', 'Claude');
+const LOCAL_AGENT_ROOT = path.join(APP_SUPPORT_ROOT, 'LocalAgentModeSessions');
 
 try {
   // Create temp dir on same filesystem as target
@@ -178,8 +180,8 @@ global.__cowork = {
   processes: new Map(),
 };
 
-// Create sessions directory
-const SESSIONS_BASE = path.join(os.homedir(), '.local/share/claude-cowork/sessions');
+// Keep the bootstrap wrapper aligned with the swift stub's session root.
+const SESSIONS_BASE = path.join(LOCAL_AGENT_ROOT, 'sessions');
 try { fs.mkdirSync(SESSIONS_BASE, { recursive: true, mode: 0o700 }); } catch(e) {}
 
 // Override getYukonSilverSupportStatus globally
@@ -211,6 +213,28 @@ Object.defineProperty = function(target, key, descriptor) {
 };
 
 console.log('[Cowork] Linux support enabled - VM will be emulated');
+
+function getSyntheticIPCResponse(channel) {
+  if (typeof channel !== 'string') {
+    return null;
+  }
+  if (channel.includes('ComputerUseTcc_$_getState')) {
+    return async () => ({
+      accessibility: 'denied',
+      screenCapture: 'denied',
+      canPrompt: false,
+    });
+  }
+  if (channel.includes('ComputerUseTcc_$_requestAccess')) {
+    return async () => ({
+      success: false,
+      accessibility: 'denied',
+      screenCapture: 'denied',
+      canPrompt: false,
+    });
+  }
+  return null;
+}
 
 // ============================================================
 // GRACEFUL SHUTDOWN — on Linux, closing all windows must quit the
@@ -278,6 +302,21 @@ Module.prototype.require = function(id) {
     if (ipcMain && !global.__coworkIPCPatched) {
       global.__coworkIPCPatched = true;
 
+      const invokeHandlers = ipcMain._invokeHandlers;
+      if (invokeHandlers && !global.__coworkInvokeHandlersPatched) {
+        global.__coworkInvokeHandlersPatched = true;
+        const originalHas = invokeHandlers.has.bind(invokeHandlers);
+        const originalGet = invokeHandlers.get.bind(invokeHandlers);
+        invokeHandlers.has = function(channel) {
+          return originalHas(channel) || !!getSyntheticIPCResponse(channel);
+        };
+        invokeHandlers.get = function(channel) {
+          const existing = originalGet(channel);
+          return existing || getSyntheticIPCResponse(channel);
+        };
+        console.log('[Cowork] _invokeHandlers fallback enabled');
+      }
+
       const originalHandle = ipcMain.handle.bind(ipcMain);
       ipcMain.handle = function(channel, handler) {
         // Filter queue-operation messages from transcripts — unknown type in current webapp
@@ -289,6 +328,12 @@ Module.prototype.require = function(id) {
             }
             return result;
           });
+        }
+
+        const syntheticHandler = getSyntheticIPCResponse(channel);
+        if (syntheticHandler) {
+          console.log(`[Cowork] Intercepting synthetic IPC handler: ${channel}`);
+          return originalHandle(channel, syntheticHandler);
         }
 
         // Intercept ClaudeVM handlers to inject our Linux implementation

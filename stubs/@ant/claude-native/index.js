@@ -52,6 +52,35 @@ function trace(category, msg, data = null) {
   }
 }
 
+function canonicalizeResolvableHostPath(hostPath) {
+  if (typeof hostPath !== 'string' || !path.isAbsolute(hostPath)) {
+    return hostPath;
+  }
+  try {
+    return fs.realpathSync(hostPath);
+  } catch (_) {
+    return hostPath;
+  }
+}
+
+function findNearestExistingAncestor(hostPath) {
+  if (typeof hostPath !== 'string' || hostPath.length === 0) {
+    return hostPath;
+  }
+  let current = path.isAbsolute(hostPath) ? hostPath : path.resolve(hostPath);
+  while (true) {
+    try {
+      return fs.realpathSync(current);
+    } catch (_) {
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return current;
+      }
+      current = parent;
+    }
+  }
+}
+
 // ============================================================
 // IPC Handler Registration
 // These handlers are what the app expects to exist
@@ -130,6 +159,27 @@ function registerCriticalHandlers() {
   safeHandle('DesktopIntl_$_requestLocaleChange', async (event, locale) => {
     trace('IPC', 'DesktopIntl_$_requestLocaleChange called', { locale });
     return { success: true };
+  });
+
+  // Computer Use TCC (macOS permissions gate) — unsupported on Linux, return
+  // a stable denied state instead of surfacing missing-handler errors.
+  safeHandle('ComputerUseTcc_$_getState', async () => {
+    trace('IPC', 'ComputerUseTcc_$_getState called');
+    return {
+      accessibility: 'denied',
+      screenCapture: 'denied',
+      canPrompt: false,
+    };
+  });
+
+  safeHandle('ComputerUseTcc_$_requestAccess', async () => {
+    trace('IPC', 'ComputerUseTcc_$_requestAccess called');
+    return {
+      success: false,
+      accessibility: 'denied',
+      screenCapture: 'denied',
+      canPrompt: false,
+    };
   });
 
   log('Critical IPC handlers registered.');
@@ -240,9 +290,19 @@ const nativeStub = {
   // File system integration
   revealInFinder: (filePath) => {
     trace('NATIVE', 'revealInFinder', { path: filePath });
-    // xdg-open on Linux
+    // xdg-open on Linux — open the directory itself when given a directory,
+    // otherwise reveal the nearest existing parent for missing files.
     const { spawn } = require('child_process');
-    spawn('xdg-open', [path.dirname(filePath)], { detached: true, stdio: 'ignore' });
+    let revealDir = filePath;
+    try {
+      const stats = fs.statSync(filePath);
+      revealDir = stats.isDirectory()
+        ? canonicalizeResolvableHostPath(filePath)
+        : canonicalizeResolvableHostPath(path.dirname(filePath));
+    } catch (_) {
+      revealDir = findNearestExistingAncestor(path.dirname(filePath));
+    }
+    spawn('xdg-open', [revealDir], { detached: true, stdio: 'ignore' });
   },
 
   // Accessibility
@@ -290,8 +350,41 @@ function write_registry_value(request) {
 }
 
 function get_app_info_for_file(filePath) {
-  // Could implement with xdg-mime
-  return null;
+  const resolvedPath = canonicalizeResolvableHostPath(filePath);
+  const fallbackName = path.basename(resolvedPath || filePath || '');
+  const info = {
+    path: resolvedPath,
+    name: fallbackName,
+    displayName: fallbackName,
+  };
+  if (typeof resolvedPath !== 'string' || resolvedPath.length === 0) {
+    return info;
+  }
+  try {
+    const { execFileSync } = require('child_process');
+    const mimeType = execFileSync('xdg-mime', ['query', 'filetype', resolvedPath], {
+      encoding: 'utf-8',
+      timeout: 2000,
+    }).trim();
+    if (mimeType) {
+      info.mimeType = mimeType;
+      try {
+        const desktopFile = execFileSync('xdg-mime', ['query', 'default', mimeType], {
+          encoding: 'utf-8',
+          timeout: 2000,
+        }).trim();
+        if (desktopFile) {
+          const desktopId = desktopFile.replace(/\.desktop$/i, '');
+          info.desktopFile = desktopFile;
+          info.id = desktopId;
+          info.bundleIdentifier = desktopId;
+          info.name = desktopId;
+          info.displayName = desktopId;
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return info;
 }
 
 // ============================================================

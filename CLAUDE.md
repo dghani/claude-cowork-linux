@@ -88,7 +88,7 @@ User sends message in webapp
 FILESYSTEM LAYOUT:
 
 /sessions/                                              ← ROOT SYMLINK (created by setup)
-  → ~/.local/share/claude-cowork/sessions/              ← ACTUAL HOST DIR (SESSIONS_BASE equivalent via symlink)
+  → ~/Library/Application Support/Claude/LocalAgentModeSessions/sessions/
 
 ~/Library/Application Support/Claude/
   └── LocalAgentModeSessions/
@@ -120,8 +120,8 @@ FILESYSTEM LAYOUT:
 5. Asar's `getTranscript()` looks in `<sessionStorageDir>/<sessionId>/.claude/projects/` — same place
 
 **If step 2 is missing** (the bug we fixed), the CLI sees `/sessions/<name>/mnt/.claude` which
-resolves via the root `/sessions/` symlink to `~/.local/share/claude-cowork/sessions/<name>/mnt/.claude/`
-— a completely different directory. Transcripts get written there, asar looks in the other place, finds nothing.
+resolves via the root `/sessions/` symlink to `~/Library/Application Support/Claude/LocalAgentModeSessions/sessions/<name>/mnt/.claude/`.
+That bypasses the per-session `.claude` mount symlink, so transcripts get written to the wrong tree and the asar finds nothing on restart.
 
 ### Chain 3: Session Persistence Across Restarts
 
@@ -270,8 +270,8 @@ readlink ~/Library/Application\ Support/Claude/LocalAgentModeSessions/sessions/<
 # 3. Check if transcripts exist at the asar-expected location
 find ~/.config/Claude/local-agent-mode-sessions/ -name "*.jsonl" -path "*projects*"
 
-# 4. Check if transcripts are at the OLD wrong location
-find ~/.local/share/claude-cowork/sessions/ -name "*.jsonl" -path "*projects*"
+# 4. Check if transcripts were written under the raw session tree instead of the mounted config dir
+find ~/Library/Application\ Support/Claude/LocalAgentModeSessions/sessions/ -name "*.jsonl" -path "*projects*"
 
 # 5. Check sessions.json for ccConversationId
 python3 -c "import json; d=json.load(open('$HOME/.config/Claude/LocalAgentModeSessions/sessions.json')); [print(s.get('sessionId','?'), s.get('ccConversationId','MISSING')) for s in d.get('sessions',[])]"

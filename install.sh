@@ -24,7 +24,7 @@ set -euo pipefail
 # Configuration
 # ============================================================
 
-VERSION="3.0.2"
+VERSION="3.0.5"
 REPO_URL="https://github.com/johnzfitch/claude-cowork-linux.git"
 INSTALL_DIR="$HOME/.local/share/claude-desktop"
 CLAUDE_DOWNLOAD_PAGE="https://claude.ai/download"
@@ -641,7 +641,7 @@ doctor() {
         log_warn "/sessions exists but is a directory (should be a symlink)"
         warn=$((warn + 1))
     else
-        log_error "/sessions: NOT FOUND -- run: sudo ln -s ~/.local/share/claude-cowork/sessions /sessions"
+        log_error "/sessions: NOT FOUND -- run: sudo ln -s \"$HOME/Library/Application Support/Claude/LocalAgentModeSessions/sessions\" /sessions"
         fail=$((fail + 1))
     fi
 

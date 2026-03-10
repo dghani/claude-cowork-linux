@@ -140,6 +140,62 @@ function isPathSafe(basePath, targetPath) {
 // Sessions directory in user space (not /sessions)
 const SESSIONS_BASE = path.join(LOCAL_AGENT_ROOT, 'sessions');
 
+// SECURITY: Translate a VM-internal /sessions/... path to a validated host path
+// under SESSIONS_BASE. Rejects path traversal attempts. Throws on invalid input.
+function translateVmPathStrict(vmPath) {
+  if (typeof vmPath !== 'string' || !vmPath.startsWith('/sessions/')) {
+    throw new Error('Not a VM path: ' + vmPath);
+  }
+  const sessionPath = vmPath.substring('/sessions/'.length);
+  if (sessionPath.includes('..') || !isPathSafe(SESSIONS_BASE, sessionPath)) {
+    trace('SECURITY: Path traversal blocked: ' + vmPath);
+    throw new Error('Path traversal blocked: ' + vmPath);
+  }
+  return path.join(SESSIONS_BASE, sessionPath);
+}
+
+// Resolve symlinks in a host path to its canonical form.
+// For nonexistent targets (write paths), walks up to the nearest existing
+// ancestor, canonicalizes that, then reattaches the remaining segments.
+// Never accepts raw /sessions/... paths — caller must translate first.
+function canonicalizeHostPath(hostPath) {
+  if (typeof hostPath !== 'string') {
+    return hostPath;
+  }
+  if (hostPath.startsWith('/sessions/')) {
+    throw new Error('canonicalizeHostPath called with raw VM path: ' + hostPath);
+  }
+  if (!path.isAbsolute(hostPath)) {
+    return hostPath;
+  }
+  try {
+    return fs.realpathSync(hostPath);
+  } catch (_) {
+    const segments = [];
+    let current = path.dirname(hostPath);
+    segments.push(path.basename(hostPath));
+    while (current !== path.dirname(current)) {
+      try {
+        return path.join(fs.realpathSync(current), ...segments);
+      } catch (_) {
+        segments.unshift(path.basename(current));
+        current = path.dirname(current);
+      }
+    }
+    return hostPath;
+  }
+}
+
+function extractSessionNameFromVmPathStrict(vmPath) {
+  const hostPath = translateVmPathStrict(vmPath);
+  const relativePath = path.relative(SESSIONS_BASE, hostPath);
+  const parts = relativePath.split(path.sep).filter(Boolean);
+  if (parts.length === 0) {
+    throw new Error('Missing session name in VM path: ' + vmPath);
+  }
+  return parts[0];
+}
+
 function generateUUID() {
   if (typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -315,8 +371,34 @@ function createMountSymlinks(sessionName, additionalMounts) {
             }
             fs.unlinkSync(mountPoint);
           } else if (stat.isDirectory()) {
-            // Replace empty directory with symlink
-            fs.rmdirSync(mountPoint);
+            // Preserve stale uploads contents before replacing with a symlink.
+            for (const entry of fs.readdirSync(mountPoint)) {
+              const sourcePath = path.join(mountPoint, entry);
+              const destPath = path.join(hostUploadsPath, entry);
+              if (fs.existsSync(destPath)) {
+                trace('  Uploads entry already exists at host path, preserving destination: ' + destPath);
+                continue;
+              }
+              try {
+                fs.renameSync(sourcePath, destPath);
+              } catch (moveErr) {
+                // renameSync fails across filesystems (EXDEV); fall back to copy+delete
+                if (moveErr.code === 'EXDEV') {
+                  const srcStat = fs.statSync(sourcePath);
+                  if (srcStat.isDirectory()) {
+                    fs.cpSync(sourcePath, destPath, { recursive: true });
+                  } else {
+                    fs.copyFileSync(sourcePath, destPath);
+                  }
+                  fs.rmSync(sourcePath, { recursive: true, force: true });
+                } else {
+                  trace('  WARNING: Could not move upload entry ' + entry + ': ' + moveErr.message);
+                }
+              }
+            }
+            fs.rmSync(mountPoint, { recursive: true, force: true });
+          } else {
+            fs.unlinkSync(mountPoint);
           }
         }
         fs.symlinkSync(hostUploadsPath, mountPoint);
@@ -420,31 +502,211 @@ function createMountSymlinks(sessionName, additionalMounts) {
 }
 
 /**
- * Extract session name from spawn arguments or process name
- * The session name is used in paths like /sessions/<sessionName>/mnt/...
+ * Extract session name only from validated VM paths supplied by the asar.
+ * Never falls back to processName, which is human-readable metadata.
  */
-function extractSessionName(processName, args) {
-  // First try to extract from args (look for /sessions/<name>/ pattern)
-  if (args && Array.isArray(args)) {
-    for (const arg of args) {
-      if (typeof arg === 'string') {
-        const match = arg.match(/\/sessions\/([^\/]+)\//);
-        if (match) {
-          trace('Extracted session name from args: ' + match[1]);
-          return match[1];
-        }
+function extractSessionName(args, envVars, sharedCwdPath) {
+  if (typeof sharedCwdPath === 'string' && sharedCwdPath.startsWith('/sessions/')) {
+    const sessionName = extractSessionNameFromVmPathStrict(sharedCwdPath);
+    trace('Extracted session name from sharedCwdPath: ' + sessionName);
+    return sessionName;
+  }
+
+  if (envVars && typeof envVars === 'object') {
+    for (const [key, value] of Object.entries(envVars)) {
+      if (typeof value === 'string' && value.startsWith('/sessions/')) {
+        const sessionName = extractSessionNameFromVmPathStrict(value);
+        trace('Extracted session name from envVar ' + key + ': ' + sessionName);
+        return sessionName;
       }
     }
   }
 
-  // Fall back to process name
-  if (processName) {
-    trace('Using process name as session name: ' + processName);
-    return processName;
+  if (args && Array.isArray(args)) {
+    for (const arg of args) {
+      if (typeof arg === 'string' && arg.startsWith('/sessions/')) {
+        const sessionName = extractSessionNameFromVmPathStrict(arg);
+        trace('Extracted session name from args: ' + sessionName);
+        return sessionName;
+      }
+    }
   }
 
-  trace('WARNING: Could not determine session name');
+  trace('WARNING: No validated VM path available for session name extraction');
   return null;
+}
+
+function findSessionName(args, envVars, sharedCwdPath) {
+  try {
+    return extractSessionName(args, envVars, sharedCwdPath);
+  } catch (err) {
+    trace('SECURITY: Invalid VM path while extracting session name: ' + err.message);
+    throw err;
+  }
+}
+
+function canonicalizeVmPathStrict(vmPath) {
+  return canonicalizeHostPath(translateVmPathStrict(vmPath));
+}
+
+// Route VM paths through strict validation+canonicalization, host paths
+// through canonicalizeHostPath. Used by files.* and other surfaces that
+// receive paths from the asar without knowing the path type.
+function canonicalizePathForHostAccess(inputPath) {
+  if (typeof inputPath === 'string' && inputPath.startsWith('/sessions/')) {
+    return canonicalizeVmPathStrict(inputPath);
+  }
+  return canonicalizeHostPath(inputPath);
+}
+
+// For arbitrary host paths from desktop integrations, avoid ancestor walking
+// if the target is missing or inaccessible. Those paths are not crossing the
+// VM boundary, so preserve the original string unless realpath succeeds.
+function canonicalizeResolvableHostPath(hostPath) {
+  if (typeof hostPath !== 'string' || !path.isAbsolute(hostPath)) {
+    return hostPath;
+  }
+  try {
+    return fs.realpathSync(hostPath);
+  } catch (_) {
+    return hostPath;
+  }
+}
+
+function findNearestExistingAncestor(hostPath) {
+  if (typeof hostPath !== 'string' || hostPath.length === 0) {
+    return hostPath;
+  }
+  let current = path.isAbsolute(hostPath) ? hostPath : path.resolve(hostPath);
+  while (true) {
+    try {
+      return fs.realpathSync(current);
+    } catch (_) {
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return current;
+      }
+      current = parent;
+    }
+  }
+}
+
+// --- writeToProcess structured stdin rewriting ---
+// When the asar sends JSON-line data to a running CLI process via stdin,
+// path values may still contain raw /sessions/... VM paths. Instead of
+// blindly regex-replacing all occurrences (which mangles user prose),
+// parse each JSON line and rewrite only known path-bearing keys.
+
+// Rewrite a single string value that may be a VM path or --flag=/sessions/...
+function rewriteVmPathStringForStructuredInput(value) {
+  if (typeof value !== 'string' || !value.includes('/sessions/')) {
+    return value;
+  }
+  try {
+    if (value.startsWith('/sessions/')) {
+      return canonicalizeVmPathStrict(value);
+    }
+    const flagValueMatch = value.match(/^([^=]+=)(\/sessions\/.*)$/);
+    if (flagValueMatch) {
+      return flagValueMatch[1] + canonicalizeVmPathStrict(flagValueMatch[2]);
+    }
+  } catch (_) {
+    return value;
+  }
+  return value;
+}
+
+// Keys whose string values are expected to contain filesystem paths.
+const STRUCTURED_VM_PATH_KEYS = new Set([
+  'args',
+  'cwd',
+  'path',
+  'filePath',
+  'workspacePath',
+  'rootPath',
+  'directory',
+  'dir',
+  'outputPath',
+  'sessionPath',
+]);
+
+// Recursively walk a parsed JSON value and rewrite VM paths in known keys.
+function rewriteStructuredVmPaths(value, key = null) {
+  if (Array.isArray(value)) {
+    if (key === 'args') {
+      let changed = false;
+      const rewritten = value.map((item) => {
+        const next = rewriteVmPathStringForStructuredInput(item);
+        changed = changed || next !== item;
+        return next;
+      });
+      return changed ? rewritten : value;
+    }
+    let changed = false;
+    const rewritten = value.map((item) => {
+      const next = rewriteStructuredVmPaths(item);
+      changed = changed || next !== item;
+      return next;
+    });
+    return changed ? rewritten : value;
+  }
+  if (!value || typeof value !== 'object') {
+    if (typeof value === 'string' && STRUCTURED_VM_PATH_KEYS.has(key)) {
+      return rewriteVmPathStringForStructuredInput(value);
+    }
+    return value;
+  }
+  let changed = false;
+  const rewritten = {};
+  for (const [childKey, childValue] of Object.entries(value)) {
+    const next = rewriteStructuredVmPaths(childValue, childKey);
+    changed = changed || next !== childValue;
+    rewritten[childKey] = next;
+  }
+  return changed ? rewritten : value;
+}
+
+// Parse newline-delimited JSON from stdin data, rewrite VM paths in each
+// parsed object, and reassemble. Non-JSON lines fall through to a simple
+// regex replacement as a safety net.
+function rewriteStructuredStdinData(data) {
+  if (typeof data !== 'string' || !data.includes('/sessions/')) {
+    return data;
+  }
+  const segments = data.match(/[^\r\n]*\r?\n|[^\r\n]+/g);
+  if (!segments) {
+    return data;
+  }
+  let changed = false;
+  const rewritten = segments.map((segment) => {
+    const newlineMatch = segment.match(/(\r?\n)$/);
+    const suffix = newlineMatch ? newlineMatch[1] : '';
+    const line = suffix ? segment.slice(0, -suffix.length) : segment;
+    if (!line.trim()) {
+      return segment;
+    }
+    try {
+      const parsed = JSON.parse(line);
+      const result = rewriteStructuredVmPaths(parsed);
+      if (result !== parsed) {
+        changed = true;
+        trace('writeToProcess: rewrote VM paths in JSON stdin line');
+        return JSON.stringify(result) + suffix;
+      }
+    } catch (_) {
+      // Not valid JSON — fall back to regex for this line
+      if (line.includes('/sessions/')) {
+        const replaced = line.replace(/\/sessions\//g, SESSIONS_BASE + '/');
+        if (replaced !== line) {
+          changed = true;
+          trace('writeToProcess: regex-replaced /sessions/ in non-JSON stdin line');
+          return replaced + suffix;
+        }
+      }
+    }
+    return segment;
+  });
+  return changed ? rewritten.join('') : data;
 }
 
 class SwiftAddonStub extends EventEmitter {
@@ -566,16 +828,39 @@ class SwiftAddonStub extends EventEmitter {
       // Open file with default application
       openFile: (filePath) => {
         console.log('[claude-swift] desktop.openFile()', filePath);
-        // Translate /sessions/... paths to host paths
         let hostPath = filePath;
         if (typeof filePath === 'string' && filePath.startsWith('/sessions/')) {
-          hostPath = path.join(SESSIONS_BASE, filePath.substring('/sessions/'.length));
-          console.log('[claude-swift] desktop.openFile() translated to:', hostPath);
+          try {
+            hostPath = canonicalizeVmPathStrict(filePath);
+          } catch (e) {
+            console.error('[claude-swift] openFile path error:', e.message);
+            return Promise.resolve(false);
+          }
+        } else {
+          hostPath = canonicalizeResolvableHostPath(filePath);
         }
+        console.log('[claude-swift] desktop.openFile() resolved to:', hostPath);
         try {
           const { execFile } = require('child_process');
-          execFile('xdg-open', [hostPath], (err) => {
-            if (err) console.error('[claude-swift] openFile error:', err.message);
+          let openTarget = hostPath;
+          let fallbackTarget = hostPath;
+          try {
+            const stats = fs.statSync(hostPath);
+            openTarget = canonicalizeResolvableHostPath(hostPath);
+            fallbackTarget = stats.isDirectory()
+              ? openTarget
+              : canonicalizeResolvableHostPath(path.dirname(hostPath));
+          } catch (_) {
+            openTarget = findNearestExistingAncestor(path.dirname(hostPath));
+            fallbackTarget = openTarget;
+          }
+          execFile('xdg-open', [openTarget], (err) => {
+            if (err) {
+              console.error('[claude-swift] openFile error:', err.message);
+              if (fallbackTarget !== openTarget) {
+                execFile('xdg-open', [fallbackTarget], () => {});
+              }
+            }
           });
           return Promise.resolve(true);
         } catch (e) {
@@ -585,22 +870,41 @@ class SwiftAddonStub extends EventEmitter {
       // Reveal file in file manager
       revealFile: (filePath) => {
         console.log('[claude-swift] desktop.revealFile()', filePath);
-        // Translate /sessions/... paths to host paths
         let hostPath = filePath;
         if (typeof filePath === 'string' && filePath.startsWith('/sessions/')) {
-          hostPath = path.join(SESSIONS_BASE, filePath.substring('/sessions/'.length));
-          console.log('[claude-swift] desktop.revealFile() translated to:', hostPath);
+          try {
+            hostPath = canonicalizeVmPathStrict(filePath);
+          } catch (e) {
+            console.error('[claude-swift] revealFile path error:', e.message);
+            return Promise.resolve(false);
+          }
+        } else {
+          hostPath = canonicalizeResolvableHostPath(filePath);
         }
+        console.log('[claude-swift] desktop.revealFile() resolved to:', hostPath);
         try {
           const { execFile } = require('child_process');
-          const dir = path.dirname(hostPath);
+          let revealDir = hostPath;
           // Try nautilus first (GNOME), fall back to xdg-open
-          execFile('nautilus', ['--select', hostPath], (err) => {
-            if (err) {
-              // Fall back to opening the directory
-              execFile('xdg-open', [dir], () => {});
-            }
-          });
+          let targetIsFile = false;
+          try {
+            const stats = fs.statSync(hostPath);
+            targetIsFile = stats.isFile();
+            revealDir = stats.isDirectory()
+              ? canonicalizeResolvableHostPath(hostPath)
+              : canonicalizeResolvableHostPath(path.dirname(hostPath));
+          } catch (_) {
+            revealDir = findNearestExistingAncestor(path.dirname(hostPath));
+          }
+          if (targetIsFile) {
+            execFile('nautilus', ['--select', hostPath], (err) => {
+              if (err) {
+                execFile('xdg-open', [revealDir], () => {});
+              }
+            });
+          } else {
+            execFile('xdg-open', [revealDir], () => {});
+          }
           return Promise.resolve(true);
         } catch (e) {
           return Promise.resolve(false);
@@ -609,12 +913,18 @@ class SwiftAddonStub extends EventEmitter {
       // Preview file (Quick Look equivalent)
       previewFile: (filePath) => {
         console.log('[claude-swift] desktop.previewFile()', filePath);
-        // Translate /sessions/... paths to host paths
         let hostPath = filePath;
         if (typeof filePath === 'string' && filePath.startsWith('/sessions/')) {
-          hostPath = path.join(SESSIONS_BASE, filePath.substring('/sessions/'.length));
-          console.log('[claude-swift] desktop.previewFile() translated to:', hostPath);
+          try {
+            hostPath = canonicalizeVmPathStrict(filePath);
+          } catch (e) {
+            console.error('[claude-swift] previewFile path error:', e.message);
+            return Promise.resolve(false);
+          }
+        } else {
+          hostPath = canonicalizeResolvableHostPath(filePath);
         }
+        console.log('[claude-swift] desktop.previewFile() resolved to:', hostPath);
         try {
           const { execFile } = require('child_process');
           // Try gnome-sushi (GNOME Quick Look), fall back to xdg-open
@@ -655,13 +965,15 @@ class SwiftAddonStub extends EventEmitter {
       console.log('[claude-swift] setThemeMode(' + mode + ')');
     };
 
-    // File system operations
+    // File system operations — canonicalize paths to resolve mount symlinks.
+    // Uses canonicalizePathForHostAccess so both /sessions/... VM paths and
+    // regular host paths are handled correctly.
     this.files = {
       // Read file contents
       read: (filePath) => {
         console.log('[claude-swift] files.read()', filePath);
         try {
-          const content = fs.readFileSync(filePath, 'utf-8');
+          const content = fs.readFileSync(canonicalizePathForHostAccess(filePath), 'utf-8');
           return Promise.resolve(content);
         } catch (e) {
           return Promise.reject(e);
@@ -671,7 +983,7 @@ class SwiftAddonStub extends EventEmitter {
       write: (filePath, content) => {
         console.log('[claude-swift] files.write()', filePath);
         try {
-          fs.writeFileSync(filePath, content, 'utf-8');
+          fs.writeFileSync(canonicalizePathForHostAccess(filePath), content, 'utf-8');
           return Promise.resolve(true);
         } catch (e) {
           return Promise.reject(e);
@@ -679,13 +991,13 @@ class SwiftAddonStub extends EventEmitter {
       },
       // Check if file exists
       exists: (filePath) => {
-        return Promise.resolve(fs.existsSync(filePath));
+        return Promise.resolve(fs.existsSync(canonicalizePathForHostAccess(filePath)));
       },
       // Get file stats
       stat: (filePath) => {
         console.log('[claude-swift] files.stat()', filePath);
         try {
-          const stats = fs.statSync(filePath);
+          const stats = fs.statSync(canonicalizePathForHostAccess(filePath));
           return Promise.resolve({
             size: stats.size,
             isFile: stats.isFile(),
@@ -702,12 +1014,14 @@ class SwiftAddonStub extends EventEmitter {
       list: (dirPath) => {
         console.log('[claude-swift] files.list()', dirPath);
         try {
-          const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+          const resolved = canonicalizePathForHostAccess(dirPath);
+          const returnedBasePath = (typeof dirPath === 'string' && dirPath.length > 0) ? dirPath : resolved;
+          const entries = fs.readdirSync(resolved, { withFileTypes: true });
           return Promise.resolve(entries.map(e => ({
             name: e.name,
             isFile: e.isFile(),
             isDirectory: e.isDirectory(),
-            path: path.join(dirPath, e.name)
+            path: path.join(returnedBasePath, e.name)
           })));
         } catch (e) {
           return Promise.reject(e);
@@ -717,7 +1031,7 @@ class SwiftAddonStub extends EventEmitter {
       watch: (filePath, callback) => {
         console.log('[claude-swift] files.watch()', filePath);
         try {
-          const watcher = fs.watch(filePath, (eventType, filename) => {
+          const watcher = fs.watch(canonicalizePathForHostAccess(filePath), (eventType, filename) => {
             callback({ type: eventType, filename });
           });
           return { close: () => watcher.close() };
@@ -844,13 +1158,28 @@ class SwiftAddonStub extends EventEmitter {
         trace('vm.spawn() isResume=' + isResume);
         trace('vm.spawn() sharedCwdPath=' + sharedCwdPath);
 
-        // Extract session name and create mount symlinks BEFORE translating paths
-        const sessionName = extractSessionName(processName, args);
-        if (sessionName && additionalMounts) {
-          trace('Creating mount symlinks for session: ' + sessionName);
-          createMountSymlinks(sessionName, additionalMounts);
+        // Derive the session slug only from validated /sessions/... paths.
+        let sessionName = null;
+        try {
+          sessionName = findSessionName(args, envVars, sharedCwdPath);
+        } catch (err) {
+          if (self._onError) self._onError(id, err.message, err.stack || '');
+          return { success: false, error: err.message };
+        }
+        if (additionalMounts) {
+          if (sessionName) {
+            trace('Creating mount symlinks for session: ' + sessionName);
+            if (!createMountSymlinks(sessionName, additionalMounts)) {
+              const msg = 'Failed to create mount symlinks for session: ' + sessionName;
+              trace('ERROR: ' + msg);
+              if (self._onError) self._onError(id, msg, '');
+              return { success: false, error: msg };
+            }
+          } else {
+            trace('WARNING: additionalMounts provided but no session VM path found; skipping mount creation');
+          }
         } else {
-          trace('Skipping mount symlink creation: sessionName=' + sessionName + ', hasAdditionalMounts=' + !!additionalMounts);
+          trace('Skipping mount symlink creation: no additionalMounts provided');
         }
 
         // SECURITY: Validate and normalize command to the resolved binary.
@@ -911,18 +1240,14 @@ class SwiftAddonStub extends EventEmitter {
         // Translate VM paths in args with path traversal protection
         let hostArgs = (args || []).map(arg => {
           if (typeof arg === 'string' && arg.startsWith('/sessions/')) {
-            // Extract session path component
-            const sessionPath = arg.substring('/sessions/'.length);
-
-            // SECURITY: Validate no path traversal
-            if (sessionPath.includes('..') || !isPathSafe(SESSIONS_BASE, sessionPath)) {
-              trace('SECURITY: Path traversal blocked: ' + arg);
+            try {
+              const translated = canonicalizeVmPathStrict(arg);
+              trace('Translated arg: ' + arg + ' -> ' + translated);
+              return translated;
+            } catch (err) {
+              trace('WARNING: Failed to translate VM arg path "' + arg + '": ' + err.message);
               return arg; // Return original (will fail gracefully)
             }
-
-            const translated = path.join(SESSIONS_BASE, sessionPath);
-            trace('Translated arg: ' + arg + ' -> ' + translated);
-            return translated;
           }
           return arg;
         });
@@ -952,10 +1277,11 @@ class SwiftAddonStub extends EventEmitter {
         // Translate sharedCwdPath if it's a VM path
         let hostCwdPath = sharedCwdPath;
         if (typeof sharedCwdPath === 'string' && sharedCwdPath.startsWith('/sessions/')) {
-          const sessionPath = sharedCwdPath.substring('/sessions/'.length);
-          if (!sessionPath.includes('..') && isPathSafe(SESSIONS_BASE, sessionPath)) {
-            hostCwdPath = path.join(SESSIONS_BASE, sessionPath);
+          try {
+            hostCwdPath = canonicalizeVmPathStrict(sharedCwdPath);
             trace('Translated sharedCwdPath: ' + sharedCwdPath + ' -> ' + hostCwdPath);
+          } catch (err) {
+            trace('WARNING: Failed to translate sharedCwdPath "' + sharedCwdPath + '": ' + err.message);
           }
         }
         trace('vm.spawn() sharedCwdPath=' + sharedCwdPath + ' hostCwdPath=' + hostCwdPath);
@@ -972,6 +1298,10 @@ class SwiftAddonStub extends EventEmitter {
       writeStdin: (id, data) => {
         console.log('[claude-swift] vm.writeStdin(' + id + ')');
         return Promise.resolve(self.writeToProcess(id, data));
+      },
+
+      isProcessRunning: (id) => {
+        return Promise.resolve(self.isProcessRunning(id));
       },
 
       start: () => {
@@ -1002,15 +1332,10 @@ class SwiftAddonStub extends EventEmitter {
       readFile: async (sessionName, vmPath) => {
         trace('vm.readFile() sessionName=' + sessionName + ' vmPath=' + vmPath);
 
-        // Translate VM path to host path
+        // Translate VM path to host path and resolve symlinks
         let hostPath = vmPath;
         if (typeof vmPath === 'string' && vmPath.startsWith('/sessions/')) {
-          const sessionPath = vmPath.substring('/sessions/'.length);
-          if (sessionPath.includes('..') || !isPathSafe(SESSIONS_BASE, sessionPath)) {
-            trace('SECURITY: Path traversal blocked in readFile: ' + vmPath);
-            throw new Error('Invalid path');
-          }
-          hostPath = path.join(SESSIONS_BASE, sessionPath);
+          hostPath = canonicalizeVmPathStrict(vmPath);
         }
 
         trace('vm.readFile() translated to: ' + hostPath);
@@ -1033,15 +1358,10 @@ class SwiftAddonStub extends EventEmitter {
       writeFile: async (sessionName, vmPath, base64Content) => {
         trace('vm.writeFile() sessionName=' + sessionName + ' vmPath=' + vmPath);
 
-        // Translate VM path to host path
+        // Translate VM path to host path and resolve symlinks
         let hostPath = vmPath;
         if (typeof vmPath === 'string' && vmPath.startsWith('/sessions/')) {
-          const sessionPath = vmPath.substring('/sessions/'.length);
-          if (sessionPath.includes('..') || !isPathSafe(SESSIONS_BASE, sessionPath)) {
-            trace('SECURITY: Path traversal blocked in writeFile: ' + vmPath);
-            throw new Error('Invalid path');
-          }
-          hostPath = path.join(SESSIONS_BASE, sessionPath);
+          hostPath = canonicalizeVmPathStrict(vmPath);
         }
 
         trace('vm.writeFile() translated to: ' + hostPath);
@@ -1133,17 +1453,9 @@ class SwiftAddonStub extends EventEmitter {
         trace('vm.mountPath() processId=' + processId + ' subpath=' + subpath + ' pathName=' + pathName + ' mode=' + mode);
         console.log('[claude-swift] vm.mountPath() processId=' + processId + ' subpath=' + subpath + ' mode=' + mode);
 
-        // Translate VM path to host path
+        // Translate VM path to host path and resolve symlinks
         if (typeof pathName === 'string' && pathName.startsWith('/sessions/')) {
-          const sessionPath = pathName.substring('/sessions/'.length);
-
-          // SECURITY: Validate no path traversal
-          if (sessionPath.includes('..') || !isPathSafe(SESSIONS_BASE, sessionPath)) {
-            trace('SECURITY: Path traversal blocked in mountPath: ' + pathName);
-            throw new Error('Invalid path');
-          }
-
-          const hostPath = path.join(SESSIONS_BASE, sessionPath);
+          const hostPath = canonicalizeVmPathStrict(pathName);
           trace('vm.mountPath() translated to: ' + hostPath);
 
           // Ensure parent directory exists
@@ -1234,11 +1546,17 @@ class SwiftAddonStub extends EventEmitter {
         for (const key of Object.keys(envVars)) {
           const val = envVars[key];
           if (typeof val === 'string' && val.startsWith('/sessions/')) {
-            const sessionPath = val.substring('/sessions/'.length);
-            if (!sessionPath.includes('..') && isPathSafe(SESSIONS_BASE, sessionPath)) {
-              const translated = path.join(SESSIONS_BASE, sessionPath);
+            try {
+              const translated = translateVmPathStrict(val);
               trace('Translated envVar ' + key + ': ' + val + ' -> ' + translated);
               envVars[key] = translated;
+            } catch (err) {
+              const warning = 'Failed to translate envVar ' + key + '="' + val + '": ' + err.message;
+              trace('WARNING: ' + warning);
+              if (key === 'CLAUDE_CONFIG_DIR') {
+                if (this._onError) this._onError(id, warning, err.stack || '');
+                return { success: false, error: warning };
+              }
             }
           }
         }
@@ -1252,8 +1570,16 @@ class SwiftAddonStub extends EventEmitter {
       // internal OAuth code path. Injecting ANTHROPIC_AUTH_TOKEN bypasses
       // that path and causes a 401 ("OAuth authentication not supported").
       // See CLAUDE.md "Critical: Auth Flow" for full explanation.
-      const cwd = sharedCwdPath || (options && options.cwd) || process.cwd();
-      const proc = nodeSpawn(command, args || [], Object.assign({ cwd: cwd, env: env, stdio: ['pipe', 'pipe', 'pipe'] }, options || {}));
+      // Strip cwd, env, and stdio from options to prevent bypassing sanitized values.
+      const { cwd: _optCwd, env: _optEnv, stdio: _optStdio, ...safeOptions } = (options || {});
+      if (_optEnv && typeof _optEnv === 'object') {
+        trace('WARNING: spawn() ignoring options.env override');
+      }
+      if (_optStdio !== undefined) {
+        trace('WARNING: spawn() ignoring options.stdio override');
+      }
+      const cwd = canonicalizePathForHostAccess(sharedCwdPath || _optCwd || process.cwd());
+      const proc = nodeSpawn(command, args || [], { ...safeOptions, cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
       this._processes.set(id, proc);
 
       const self = this;
@@ -1318,7 +1644,16 @@ class SwiftAddonStub extends EventEmitter {
   spawnSync(command, args, options) {
     console.log('[claude-swift] spawnSync() cmd=' + command);
     try {
-      const result = nodeSpawnSync(command, args || [], Object.assign({ encoding: 'utf-8' }, options || {}));
+      const { cwd: optCwd, env: optEnv, ...safeOptions } = (options || {});
+      const cwd = canonicalizePathForHostAccess(optCwd || process.cwd());
+      // Intentionally inherit process.env here. The asar does not pass its
+      // filtered LocalAgentMode envVars through spawnSync(), so ignoring
+      // options.env preserves the existing behavior while still blocking
+      // callers from overriding the canonicalized cwd.
+      if (optEnv && typeof optEnv === 'object') {
+        trace('WARNING: spawnSync() ignoring options.env override');
+      }
+      const result = nodeSpawnSync(command, args || [], { encoding: 'utf-8', cwd, ...safeOptions });
       return { stdout: result.stdout, stderr: result.stderr, status: result.status, signal: result.signal, error: result.error };
     } catch (err) {
       console.error('[claude-swift] spawnSync error:', err);
@@ -1372,16 +1707,20 @@ class SwiftAddonStub extends EventEmitter {
     return this.killProcess(id);
   }
 
+  isProcessRunning(id) {
+    const proc = this._processes.get(id);
+    return !!(proc && proc.exitCode === null && !proc.killed);
+  }
+
   writeToProcess(id, data) {
     console.log('[claude-swift] writeToProcess(' + id + ')');
     const proc = this._processes.get(id);
     if (proc && proc.stdin) {
-      // Translate /sessions/... paths to host paths in stdin data
       let translatedData = data;
       if (typeof data === 'string' && data.includes('/sessions/')) {
-        translatedData = data.replace(/\/sessions\//g, SESSIONS_BASE + '/');
+        translatedData = rewriteStructuredStdinData(data);
         if (TRACE_IO) {
-          trace('writeToProcess: translated /sessions/ paths in stdin');
+          trace('writeToProcess: translated structured /sessions/ paths in stdin');
         }
       }
       proc.stdin.write(translatedData);
