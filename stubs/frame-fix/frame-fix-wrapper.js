@@ -608,7 +608,7 @@ Module.prototype.require = function(id) {
               return false;
             }
           } catch (_) {
-            // If realpath fails, walk up to find nearest existing ancestor
+            // If realpath fails, walk up to find nearest existing ancestor directory
             // but only within the session root to prevent escaping
             let current = path.dirname(resolvedPath);
             let foundAncestor = false;
@@ -620,7 +620,8 @@ Module.prototype.require = function(id) {
                 return false;
               }
               try {
-                resolvedPath = path.join(fs.realpathSync(current), path.basename(resolvedPath));
+                // Use the existing ancestor directory directly, don't append missing filename
+                resolvedPath = fs.realpathSync(current);
                 foundAncestor = true;
                 break;
               } catch (_) {
