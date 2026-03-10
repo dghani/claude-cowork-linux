@@ -5,7 +5,7 @@
 This project is a Linux compatibility layer for Claude Desktop's Cowork feature.
 It stubs macOS-native modules so the unmodified Electron app runs on Linux.
 The layer does not implement OAuth flows, store credentials, or make API calls.
-See [OAUTH-COMPLIANCE.md](OAUTH-COMPLIANCE.md) for a full audit of credential handling.
+See [OAUTH-COMPLIANCE.md](docs/OAUTH-COMPLIANCE.md) for a full audit of credential handling.
 
 Vulnerabilities in Claude Desktop itself or the Claude Code CLI should be reported
 directly to Anthropic at <https://www.anthropic.com/security>.

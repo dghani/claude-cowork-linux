@@ -81,9 +81,8 @@ ARCHITECTURE.md
 auth_code_reference.txt
 auth_findings_summary.md
 
-# Local Claude Code config (session notes, local settings)
-.claude/session-resume.md
-.claude/settings.local.json
+# Local Claude Code config
+.claude/
 
 # OS files
 .DS_Store

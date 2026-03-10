@@ -275,7 +275,8 @@ claude-cowork-linux/
 ├── launch-devtools.sh                  # Launcher with --inspect (Node.js DevTools)
 ├── validate.sh                         # Env var checks, stub URL validation, log scanning
 ├── PKGBUILD                            # Arch Linux AUR package definition
-├── OAUTH-COMPLIANCE.md                 # OAuth token handling audit
+├── docs/releases/                      # Per-version release notes
+├── docs/OAUTH-COMPLIANCE.md            # OAuth token handling audit
 ├── CLAUDE.md                           # Project guide and critical paths
 ├── README.md                           # This file
 └── LICENSE

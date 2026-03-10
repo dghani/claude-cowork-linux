@@ -21,7 +21,7 @@ compatibility, fix bugs, or extend distro support are very welcome.
 
 - Auto-update mechanisms (security surface concern — see issue #37)
 - Features that require modifying Claude Desktop's unmodified renderer code
-- Any change to credential handling that hasn't been reviewed against [OAUTH-COMPLIANCE.md](OAUTH-COMPLIANCE.md)
+- Any change to credential handling that hasn't been reviewed against [OAUTH-COMPLIANCE.md](docs/OAUTH-COMPLIANCE.md)
 
 ## Development Setup
 
@@ -62,5 +62,5 @@ Changes to these files require extra care and a note in your PR explaining the s
 - `stubs/@ant/claude-native/index.js` — `AuthRequest.start()`, `ALLOWED_AUTH_ORIGINS`
 - `cowork/sdk_bridge.js` — `filterEnvForSubprocess()`
 
-If your change affects credential handling, verify it against [OAUTH-COMPLIANCE.md](OAUTH-COMPLIANCE.md).
+If your change affects credential handling, verify it against [OAUTH-COMPLIANCE.md](docs/OAUTH-COMPLIANCE.md).
 
