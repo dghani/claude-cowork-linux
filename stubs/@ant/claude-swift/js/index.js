@@ -591,122 +591,41 @@ function findNearestExistingAncestor(hostPath) {
   }
 }
 
-// --- writeToProcess structured stdin rewriting ---
-// When the asar sends JSON-line data to a running CLI process via stdin,
-// path values may still contain raw /sessions/... VM paths. Instead of
-// blindly regex-replacing all occurrences (which mangles user prose),
-// parse each JSON line and rewrite only known path-bearing keys.
-
-// Rewrite a single string value that may be a VM path or --flag=/sessions/...
-function rewriteVmPathStringForStructuredInput(value) {
-  if (typeof value !== 'string' || !value.includes('/sessions/')) {
-    return value;
-  }
-  try {
-    if (value.startsWith('/sessions/')) {
-      return canonicalizeVmPathStrict(value);
-    }
-    const flagValueMatch = value.match(/^([^=]+=)(\/sessions\/.*)$/);
-    if (flagValueMatch) {
-      return flagValueMatch[1] + canonicalizeVmPathStrict(flagValueMatch[2]);
-    }
-  } catch (_) {
-    return value;
-  }
-  return value;
+function getSessionRootForVmPath(vmPath) {
+  return path.join(SESSIONS_BASE, extractSessionNameFromVmPathStrict(vmPath));
 }
 
-// Keys whose string values are expected to contain filesystem paths.
-const STRUCTURED_VM_PATH_KEYS = new Set([
-  'args',
-  'cwd',
-  'path',
-  'filePath',
-  'workspacePath',
-  'rootPath',
-  'directory',
-  'dir',
-  'outputPath',
-  'sessionPath',
-]);
+function findNearestExistingAncestorWithin(hostPath, stopAtPath) {
+  if (typeof hostPath !== 'string' || hostPath.length === 0) {
+    throw new Error('Missing host path for bounded ancestor lookup');
+  }
+  if (typeof stopAtPath !== 'string' || stopAtPath.length === 0) {
+    throw new Error('Missing stop path for bounded ancestor lookup');
+  }
 
-// Recursively walk a parsed JSON value and rewrite VM paths in known keys.
-function rewriteStructuredVmPaths(value, key = null) {
-  if (Array.isArray(value)) {
-    if (key === 'args') {
-      let changed = false;
-      const rewritten = value.map((item) => {
-        const next = rewriteVmPathStringForStructuredInput(item);
-        changed = changed || next !== item;
-        return next;
-      });
-      return changed ? rewritten : value;
-    }
-    let changed = false;
-    const rewritten = value.map((item) => {
-      const next = rewriteStructuredVmPaths(item);
-      changed = changed || next !== item;
-      return next;
-    });
-    return changed ? rewritten : value;
-  }
-  if (!value || typeof value !== 'object') {
-    if (typeof value === 'string' && STRUCTURED_VM_PATH_KEYS.has(key)) {
-      return rewriteVmPathStringForStructuredInput(value);
-    }
-    return value;
-  }
-  let changed = false;
-  const rewritten = {};
-  for (const [childKey, childValue] of Object.entries(value)) {
-    const next = rewriteStructuredVmPaths(childValue, childKey);
-    changed = changed || next !== childValue;
-    rewritten[childKey] = next;
-  }
-  return changed ? rewritten : value;
-}
+  const boundary = path.resolve(stopAtPath);
+  let current = path.resolve(hostPath);
 
-// Parse newline-delimited JSON from stdin data, rewrite VM paths in each
-// parsed object, and reassemble. Non-JSON lines fall through to a simple
-// regex replacement as a safety net.
-function rewriteStructuredStdinData(data) {
-  if (typeof data !== 'string' || !data.includes('/sessions/')) {
-    return data;
-  }
-  const segments = data.match(/[^\r\n]*\r?\n|[^\r\n]+/g);
-  if (!segments) {
-    return data;
-  }
-  let changed = false;
-  const rewritten = segments.map((segment) => {
-    const newlineMatch = segment.match(/(\r?\n)$/);
-    const suffix = newlineMatch ? newlineMatch[1] : '';
-    const line = suffix ? segment.slice(0, -suffix.length) : segment;
-    if (!line.trim()) {
-      return segment;
+  while (true) {
+    const relative = path.relative(boundary, current);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      throw new Error('Path escapes session root: ' + hostPath);
     }
     try {
-      const parsed = JSON.parse(line);
-      const result = rewriteStructuredVmPaths(parsed);
-      if (result !== parsed) {
-        changed = true;
-        trace('writeToProcess: rewrote VM paths in JSON stdin line');
-        return JSON.stringify(result) + suffix;
-      }
+      return fs.realpathSync(current);
     } catch (_) {
-      // Not valid JSON — fall back to regex for this line
-      if (line.includes('/sessions/')) {
-        const replaced = line.replace(/\/sessions\//g, SESSIONS_BASE + '/');
-        if (replaced !== line) {
-          changed = true;
-          trace('writeToProcess: regex-replaced /sessions/ in non-JSON stdin line');
-          return replaced + suffix;
-        }
+      if (current === boundary) {
+        break;
       }
+      const parent = path.dirname(current);
+      if (parent === current) {
+        break;
+      }
+      current = parent;
     }
-    return segment;
-  });
-  return changed ? rewritten.join('') : data;
+  }
+
+  throw new Error('No existing ancestor found within session root: ' + hostPath);
 }
 
 class SwiftAddonStub extends EventEmitter {
@@ -829,9 +748,13 @@ class SwiftAddonStub extends EventEmitter {
       openFile: (filePath) => {
         console.log('[claude-swift] desktop.openFile()', filePath);
         let hostPath = filePath;
+        let translatedVmPath = null;
+        let sessionRoot = null;
         if (typeof filePath === 'string' && filePath.startsWith('/sessions/')) {
           try {
-            hostPath = canonicalizeVmPathStrict(filePath);
+            translatedVmPath = translateVmPathStrict(filePath);
+            sessionRoot = getSessionRootForVmPath(filePath);
+            hostPath = canonicalizeHostPath(translatedVmPath);
           } catch (e) {
             console.error('[claude-swift] openFile path error:', e.message);
             return Promise.resolve(false);
@@ -850,9 +773,19 @@ class SwiftAddonStub extends EventEmitter {
             fallbackTarget = stats.isDirectory()
               ? openTarget
               : canonicalizeResolvableHostPath(path.dirname(hostPath));
-          } catch (_) {
-            openTarget = findNearestExistingAncestor(path.dirname(hostPath));
-            fallbackTarget = openTarget;
+          } catch (err) {
+            if (translatedVmPath && sessionRoot) {
+              try {
+                openTarget = findNearestExistingAncestorWithin(path.dirname(translatedVmPath), sessionRoot);
+                fallbackTarget = openTarget;
+              } catch (fallbackErr) {
+                console.error('[claude-swift] openFile fallback error:', fallbackErr.message);
+                return Promise.resolve(false);
+              }
+            } else {
+              openTarget = findNearestExistingAncestor(path.dirname(hostPath));
+              fallbackTarget = openTarget;
+            }
           }
           execFile('xdg-open', [openTarget], (err) => {
             if (err) {
@@ -871,9 +804,13 @@ class SwiftAddonStub extends EventEmitter {
       revealFile: (filePath) => {
         console.log('[claude-swift] desktop.revealFile()', filePath);
         let hostPath = filePath;
+        let translatedVmPath = null;
+        let sessionRoot = null;
         if (typeof filePath === 'string' && filePath.startsWith('/sessions/')) {
           try {
-            hostPath = canonicalizeVmPathStrict(filePath);
+            translatedVmPath = translateVmPathStrict(filePath);
+            sessionRoot = getSessionRootForVmPath(filePath);
+            hostPath = canonicalizeHostPath(translatedVmPath);
           } catch (e) {
             console.error('[claude-swift] revealFile path error:', e.message);
             return Promise.resolve(false);
@@ -893,8 +830,17 @@ class SwiftAddonStub extends EventEmitter {
             revealDir = stats.isDirectory()
               ? canonicalizeResolvableHostPath(hostPath)
               : canonicalizeResolvableHostPath(path.dirname(hostPath));
-          } catch (_) {
-            revealDir = findNearestExistingAncestor(path.dirname(hostPath));
+          } catch (err) {
+            if (translatedVmPath && sessionRoot) {
+              try {
+                revealDir = findNearestExistingAncestorWithin(path.dirname(translatedVmPath), sessionRoot);
+              } catch (fallbackErr) {
+                console.error('[claude-swift] revealFile fallback error:', fallbackErr.message);
+                return Promise.resolve(false);
+              }
+            } else {
+              revealDir = findNearestExistingAncestor(path.dirname(hostPath));
+            }
           }
           if (targetIsFile) {
             execFile('nautilus', ['--select', hostPath], (err) => {
@@ -1585,6 +1531,7 @@ class SwiftAddonStub extends EventEmitter {
       const self = this;
       let stdoutBuffer = '';
       let stderrBuffer = '';
+      let stdoutSeq = 0; // DEBUG: sequence counter for message ordering diagnosis
 
       if (proc.stdout) {
         proc.stdout.on('data', function(data) {
@@ -1593,6 +1540,14 @@ class SwiftAddonStub extends EventEmitter {
           stdoutBuffer = lines.pop();
           for (const line of lines) {
             if (line.trim() && self._onStdout) {
+              stdoutSeq++;
+              // DEBUG: Log sequence and message type for ordering diagnosis
+              let msgType = 'unknown';
+              try {
+                const parsed = JSON.parse(line);
+                msgType = parsed.type || (parsed.message?.role) || 'data';
+              } catch (_) {}
+              console.log('[stdout-order] seq=' + stdoutSeq + ' type=' + msgType + ' ts=' + Date.now() + ' len=' + line.length);
               if (TRACE_IO) {
                 trace('stdout line: ' + line.substring(0, 500) + (line.length > 500 ? '...' : ''));
               }
@@ -1716,14 +1671,7 @@ class SwiftAddonStub extends EventEmitter {
     console.log('[claude-swift] writeToProcess(' + id + ')');
     const proc = this._processes.get(id);
     if (proc && proc.stdin) {
-      let translatedData = data;
-      if (typeof data === 'string' && data.includes('/sessions/')) {
-        translatedData = rewriteStructuredStdinData(data);
-        if (TRACE_IO) {
-          trace('writeToProcess: translated structured /sessions/ paths in stdin');
-        }
-      }
-      proc.stdin.write(translatedData);
+      proc.stdin.write(data);
     }
   }
 

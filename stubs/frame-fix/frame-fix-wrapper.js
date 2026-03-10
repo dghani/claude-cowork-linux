@@ -214,6 +214,101 @@ Object.defineProperty = function(target, key, descriptor) {
 
 console.log('[Cowork] Linux support enabled - VM will be emulated');
 
+const IGNORED_LIVE_MESSAGE_TYPES = new Set(['queue-operation', 'rate_limit_event']);
+
+function parseRequestedProcessId(args) {
+  for (const arg of args) {
+    if (typeof arg === 'string') {
+      return arg;
+    }
+    if (arg && typeof arg === 'object' && typeof arg.id === 'string') {
+      return arg.id;
+    }
+  }
+  return null;
+}
+
+async function getCoworkProcessRunningState(processId) {
+  const stub = global.__coworkSwiftStub;
+  const specialKeepalive = processId === '__keepalive__' || processId === '__heartbeat__';
+
+  try {
+    if (stub && typeof stub.isProcessRunning === 'function' && !stub.isProcessRunning.__coworkSyntheticWrapper) {
+      const result = await Promise.resolve(stub.isProcessRunning(processId));
+      if (result && typeof result === 'object' && 'running' in result) {
+        return {
+          running: !!result.running,
+          exitCode: result.exitCode ?? null,
+        };
+      }
+      const running = !!result;
+      return { running, exitCode: running ? null : 0 };
+    }
+    if (stub && stub.vm && typeof stub.vm.isProcessRunning === 'function' && !stub.vm.isProcessRunning.__coworkSyntheticWrapper) {
+      const result = await Promise.resolve(stub.vm.isProcessRunning(processId));
+      if (result && typeof result === 'object' && 'running' in result) {
+        return {
+          running: !!result.running,
+          exitCode: result.exitCode ?? null,
+        };
+      }
+      const running = !!result;
+      return { running, exitCode: running ? null : 0 };
+    }
+  } catch (_) {}
+
+  if (typeof processId === 'string' && global.__cowork.processes.has(processId)) {
+    return { running: true, exitCode: null };
+  }
+  if (specialKeepalive) {
+    return { running: true, exitCode: null };
+  }
+  return { running: false, exitCode: 0 };
+}
+
+function getIgnoredLiveMessageType(channel, payload) {
+  if (typeof channel !== 'string') {
+    return null;
+  }
+  if (!channel.includes('LocalAgentModeSessions_$_onEvent') && !channel.includes('LocalSessions_$_onEvent')) {
+    return null;
+  }
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+
+  if (payload.type === 'message' && payload.message && typeof payload.message === 'object') {
+    const messageType = payload.message.type;
+    return IGNORED_LIVE_MESSAGE_TYPES.has(messageType) ? messageType : null;
+  }
+
+  return IGNORED_LIVE_MESSAGE_TYPES.has(payload.type) ? payload.type : null;
+}
+
+function logIgnoredLiveMessage(channel, payload, messageType) {
+  if (!global.__coworkIgnoredLiveMessageStats) {
+    global.__coworkIgnoredLiveMessageStats = new Map();
+  }
+
+  const key = `${channel}:${messageType}`;
+  const current = global.__coworkIgnoredLiveMessageStats.get(key) || { count: 0, lastLoggedAt: 0 };
+  current.count += 1;
+
+  const now = Date.now();
+  const shouldLog = current.count <= 3 || (now - current.lastLoggedAt) >= 60000;
+  if (shouldLog) {
+    current.lastLoggedAt = now;
+    console.log('[Cowork] Ignored live session event ' + JSON.stringify({
+      channel: channel.includes('LocalAgentModeSessions') ? 'LocalAgentModeSessions.onEvent' : 'LocalSessions.onEvent',
+      messageType,
+      count: current.count,
+      sessionId: payload && typeof payload === 'object' ? (payload.sessionId || null) : null,
+    }));
+  }
+
+  global.__coworkIgnoredLiveMessageStats.set(key, current);
+}
+
 function getSyntheticIPCResponse(channel) {
   if (typeof channel !== 'string') {
     return null;
@@ -232,6 +327,12 @@ function getSyntheticIPCResponse(channel) {
       screenCapture: 'denied',
       canPrompt: false,
     });
+  }
+  if (channel.includes('isProcessRunning')) {
+    return async (...args) => {
+      const processId = parseRequestedProcessId(args);
+      return getCoworkProcessRunningState(processId);
+    };
   }
   return null;
 }
@@ -274,6 +375,7 @@ Module.prototype.require = function(id) {
   if (id && id.includes('@ant/claude-swift')) {
     console.log('[Cowork] Intercepting @ant/claude-swift');
     const swiftStub = originalRequire.apply(this, arguments);
+    global.__coworkSwiftStub = swiftStub;
     // Ensure the VM reports as supported
     if (swiftStub && swiftStub.vm) {
       const originalGetStatus = swiftStub.vm.getStatus;
@@ -288,6 +390,22 @@ Module.prototype.require = function(id) {
       swiftStub.vm.isSupported = function() {
         return true;
       };
+      if (typeof swiftStub.vm.isProcessRunning !== 'function') {
+        const syntheticVmIsProcessRunning = async function(processId) {
+          const state = await getCoworkProcessRunningState(processId);
+          return state.running;
+        };
+        syntheticVmIsProcessRunning.__coworkSyntheticWrapper = true;
+        swiftStub.vm.isProcessRunning = syntheticVmIsProcessRunning;
+      }
+    }
+    if (swiftStub && typeof swiftStub.isProcessRunning !== 'function') {
+      const syntheticIsProcessRunning = async function(processId) {
+        const state = await getCoworkProcessRunningState(processId);
+        return state.running;
+      };
+      syntheticIsProcessRunning.__coworkSyntheticWrapper = true;
+      swiftStub.isProcessRunning = syntheticIsProcessRunning;
     }
     return swiftStub;
   }
@@ -324,7 +442,7 @@ Module.prototype.require = function(id) {
           return originalHandle(channel, async (...args) => {
             const result = await handler(...args);
             if (Array.isArray(result)) {
-              return result.filter(msg => msg && msg.type !== 'queue-operation');
+              return result.filter(msg => msg && !IGNORED_LIVE_MESSAGE_TYPES.has(msg.type));
             }
             return result;
           });
@@ -355,6 +473,10 @@ Module.prototype.require = function(id) {
             if (method === 'isSupported' || method === 'getSupportStatus') {
               return 'supported';
             }
+            if (method === 'isProcessRunning') {
+              const processId = parseRequestedProcessId(args);
+              return getCoworkProcessRunningState(processId);
+            }
 
             // Call original handler for other methods
             try {
@@ -377,6 +499,7 @@ Module.prototype.require = function(id) {
     // close events since we spoof darwin. We prepend a listener that forces
     // app.quit() so killactive/WM close works on all Linux DEs.
     let _closePatched = new WeakSet();
+    let _sendPatched = new WeakSet();
 
     function patchWindowClose(win) {
       if (_closePatched.has(win)) return;
@@ -392,16 +515,42 @@ Module.prototype.require = function(id) {
       });
     }
 
+    function patchEventDispatch(contents) {
+      if (!contents || _sendPatched.has(contents) || typeof contents.send !== 'function') {
+        return;
+      }
+      _sendPatched.add(contents);
+      const originalSend = contents.send.bind(contents);
+      contents.send = function(channel, ...args) {
+        const ignoredType = getIgnoredLiveMessageType(channel, args[0]);
+        if (ignoredType) {
+          logIgnoredLiveMessage(channel, args[0], ignoredType);
+          return false;
+        }
+        return originalSend(channel, ...args);
+      };
+    }
+
     // Hook webContents creation to catch windows as they appear
     _app.on('web-contents-created', (_event, contents) => {
       const owner = contents.getOwnerBrowserWindow && contents.getOwnerBrowserWindow();
       if (owner) patchWindowClose(owner);
+      patchEventDispatch(contents);
     });
 
     // Also patch on browser-window-created for certainty
     _app.on('browser-window-created', (_event, win) => {
       patchWindowClose(win);
+      if (win && win.webContents) {
+        patchEventDispatch(win.webContents);
+      }
     });
+
+    if (module.webContents && typeof module.webContents.getAllWebContents === 'function') {
+      for (const contents of module.webContents.getAllWebContents()) {
+        patchEventDispatch(contents);
+      }
+    }
 
     const OriginalMenu = module.Menu;
 
@@ -430,6 +579,38 @@ Module.prototype.require = function(id) {
         }
       }
     };
+
+    // Intercept shell.showItemInFolder to translate VM paths for scratchpad/file links
+    if (module.shell && !global.__coworkShellPatched) {
+      global.__coworkShellPatched = true;
+      const originalShowItemInFolder = module.shell.showItemInFolder.bind(module.shell);
+      module.shell.showItemInFolder = function(fullPath) {
+        let resolvedPath = fullPath;
+        // Translate /sessions/... VM paths to host paths
+        if (typeof fullPath === 'string' && fullPath.startsWith('/sessions/')) {
+          const sessionPath = fullPath.substring('/sessions/'.length);
+          resolvedPath = path.join(LOCAL_AGENT_ROOT, 'sessions', sessionPath);
+          // Resolve symlinks to get canonical host path
+          try {
+            resolvedPath = fs.realpathSync(resolvedPath);
+          } catch (_) {
+            // If realpath fails, walk up to find nearest existing ancestor
+            let current = path.dirname(resolvedPath);
+            while (current !== path.dirname(current)) {
+              try {
+                resolvedPath = path.join(fs.realpathSync(current), path.basename(resolvedPath));
+                break;
+              } catch (_) {
+                current = path.dirname(current);
+              }
+            }
+          }
+          console.log('[Frame Fix] shell.showItemInFolder translated:', fullPath, '->', resolvedPath);
+        }
+        return originalShowItemInFolder(resolvedPath);
+      };
+      console.log('[Frame Fix] shell.showItemInFolder patched for VM path translation');
+    }
   }
 
   return module;
