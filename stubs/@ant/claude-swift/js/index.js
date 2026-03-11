@@ -439,16 +439,21 @@ function createMountSymlinks(sessionName, additionalMounts) {
     // Verify host path exists
     if (!fs.existsSync(hostPath)) {
       trace('  WARNING: Host path does not exist: ' + hostPath);
-      // Try to create it for output directories
-      if (mountName === 'outputs' || mountInfo.mode === 'rw') {
+      // Try to create it for output directories or writable mounts (rw, rwd, etc.)
+      const isWritable = mountName === 'outputs' ||
+        (typeof mountInfo.mode === 'string' && mountInfo.mode.includes('w'));
+      if (isWritable) {
         try {
           fs.mkdirSync(hostPath, { recursive: true, mode: 0o700 });
           trace('  Created host directory: ' + hostPath);
         } catch (e) {
           trace('  ERROR creating host directory: ' + e.message);
+          failedMounts.push(mountName);
           continue;
         }
       } else {
+        trace('  ERROR: Host path missing and mount is read-only');
+        failedMounts.push(mountName);
         continue;
       }
     }
@@ -466,7 +471,9 @@ function createMountSymlinks(sessionName, additionalMounts) {
           trace('  Removing existing symlink (pointed to: ' + existingTarget + ')');
           fs.unlinkSync(mountPoint);
         } else if (stats.isDirectory()) {
-          trace('  Mount point is a directory, skipping symlink creation');
+          // Stale directory at mount point - can't create symlink here
+          trace('  ERROR: Mount point is a directory, cannot create symlink');
+          failedMounts.push(mountName);
           continue;
         } else {
           trace('  Removing existing file at mount point');
