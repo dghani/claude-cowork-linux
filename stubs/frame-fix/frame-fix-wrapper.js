@@ -335,7 +335,58 @@ function getSyntheticIPCResponse(channel) {
       return getCoworkProcessRunningState(processId);
     };
   }
+  // ClaudeCode handlers - stub out for Linux to enable the Code tab
+  if (channel.includes('ClaudeCode_$_getStatus')) {
+    return async () => ({
+      status: 'ready',
+      ready: true,
+      installed: true,
+      downloading: false,
+      progress: 100,
+      version: '2.1.72',
+    });
+  }
+  if (channel.includes('ClaudeCode_$_prepare')) {
+    return async () => ({ ready: true, success: true });
+  }
   return null;
+}
+
+function ensureSyntheticWebIPCHandlers(ipcMain, originalHandle, channel) {
+  if (!ipcMain || typeof channel !== 'string') {
+    return;
+  }
+  const marker = '_$_claude.web_$_';
+  const markerIndex = channel.indexOf(marker);
+  if (markerIndex === -1) {
+    return;
+  }
+  const channelPrefix = channel.slice(0, markerIndex + marker.length);
+  const syntheticSuffixes = [
+    'ComputerUseTcc_$_getState',
+    'ComputerUseTcc_$_requestAccess',
+    'ClaudeCode_$_getStatus',
+    'ClaudeCode_$_prepare',
+  ];
+  if (!global.__coworkSyntheticIPCChannels) {
+    global.__coworkSyntheticIPCChannels = new Set();
+  }
+  for (const suffix of syntheticSuffixes) {
+    const syntheticChannel = channelPrefix + suffix;
+    if (global.__coworkSyntheticIPCChannels.has(syntheticChannel)) {
+      continue;
+    }
+    const syntheticHandler = getSyntheticIPCResponse(syntheticChannel);
+    if (!syntheticHandler) {
+      continue;
+    }
+    try {
+      ipcMain.removeHandler(syntheticChannel);
+    } catch (_) {}
+    originalHandle(syntheticChannel, syntheticHandler);
+    global.__coworkSyntheticIPCChannels.add(syntheticChannel);
+    console.log('[Cowork] Registered synthetic IPC handler: ' + syntheticChannel);
+  }
 }
 
 // ============================================================
@@ -438,6 +489,8 @@ Module.prototype.require = function(id) {
 
       const originalHandle = ipcMain.handle.bind(ipcMain);
       ipcMain.handle = function(channel, handler) {
+        ensureSyntheticWebIPCHandlers(ipcMain, originalHandle, channel);
+
         // Filter ignored message types from transcripts — check both top-level and nested
         if (channel.includes('getTranscript')) {
           return originalHandle(channel, async (...args) => {
@@ -499,6 +552,42 @@ Module.prototype.require = function(id) {
           };
           return originalHandle(channel, wrappedHandler);
         }
+
+        // Intercept ClaudeCode handlers for the Code tab feature
+        if (channel.includes('ClaudeCode')) {
+          console.log(`[Cowork] Intercepting ClaudeCode handler: ${channel}`);
+
+          const wrappedHandler = async (...args) => {
+            const method = channel.split('_$_').pop();
+            console.log(`[Cowork] ClaudeCode.${method} called`);
+
+            // Override specific methods for Linux - return "ready" status
+            if (method === 'getStatus') {
+              return {
+                status: 'ready',
+                ready: true,
+                installed: true,
+                downloading: false,
+                progress: 100,
+                version: '2.1.72',
+              };
+            }
+            if (method === 'prepare') {
+              return { ready: true, success: true };
+            }
+
+            // Call original handler for other methods
+            try {
+              return await handler(...args);
+            } catch(e) {
+              console.log(`[Cowork] ClaudeCode.${method} handler error:`, e.message);
+              // Return a safe default instead of throwing
+              return { ready: true, status: 'ready' };
+            }
+          };
+          return originalHandle(channel, wrappedHandler);
+        }
+
         return originalHandle(channel, handler);
       };
 
@@ -595,6 +684,9 @@ Module.prototype.require = function(id) {
     if (module.shell && !global.__coworkShellPatched) {
       global.__coworkShellPatched = true;
       const originalShowItemInFolder = module.shell.showItemInFolder.bind(module.shell);
+      const originalOpenPath = typeof module.shell.openPath === 'function'
+        ? module.shell.openPath.bind(module.shell)
+        : null;
       module.shell.showItemInFolder = function(fullPath) {
         let resolvedPath = fullPath;
         let candidatePath = null;
@@ -654,6 +746,18 @@ Module.prototype.require = function(id) {
           }
           console.log('[Frame Fix] shell.showItemInFolder translated:', fullPath, '->', resolvedPath);
         }
+        try {
+          const stats = typeof resolvedPath === 'string' ? fs.statSync(resolvedPath) : null;
+          if (stats && stats.isDirectory()) {
+            console.log('[Frame Fix] shell.showItemInFolder opening directory directly:', resolvedPath);
+            if (originalOpenPath) {
+              originalOpenPath(resolvedPath).catch((err) => {
+                console.error('[Frame Fix] shell.openPath failed for directory:', resolvedPath, err && err.message ? err.message : err);
+              });
+              return true;
+            }
+          }
+        } catch (_) {}
         return originalShowItemInFolder(resolvedPath);
       };
       console.log('[Frame Fix] shell.showItemInFolder patched for VM path translation');
