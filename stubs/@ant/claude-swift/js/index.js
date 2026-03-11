@@ -337,6 +337,9 @@ function createMountSymlinks(sessionName, additionalMounts) {
   }
 
   // Create symlinks for each mount
+  // Track failures for required mounts (.claude is critical for transcripts)
+  const REQUIRED_MOUNTS = new Set(['.claude']);
+  const failedMounts = [];
   const mountEntries = Object.entries(additionalMounts);
   trace('Processing ' + mountEntries.length + ' mount entries');
 
@@ -475,6 +478,7 @@ function createMountSymlinks(sessionName, additionalMounts) {
       trace('  SUCCESS: Created symlink ' + mountPoint + ' -> ' + hostPath);
     } catch (e) {
       trace('  ERROR creating symlink: ' + e.message);
+      failedMounts.push(mountName);
     }
   }
 
@@ -498,6 +502,15 @@ function createMountSymlinks(sessionName, additionalMounts) {
   }
   trace('=== END MOUNT SYMLINKS ===');
 
+  // Fail if any required mounts failed
+  const failedRequired = failedMounts.filter(m => REQUIRED_MOUNTS.has(m));
+  if (failedRequired.length > 0) {
+    trace('FATAL: Required mounts failed: ' + failedRequired.join(', '));
+    return false;
+  }
+  if (failedMounts.length > 0) {
+    trace('WARNING: Non-required mounts failed: ' + failedMounts.join(', '));
+  }
   return true;
 }
 
@@ -980,7 +993,8 @@ class SwiftAddonStub extends EventEmitter {
           });
           return { close: () => watcher.close() };
         } catch (e) {
-          return { close: () => {} };
+          console.error('[claude-swift] files.watch() failed:', filePath, e.message);
+          throw e;
         }
       }
     };
@@ -1577,8 +1591,9 @@ class SwiftAddonStub extends EventEmitter {
           self._onStderr(id, stderrBuffer);
         }
         console.log('[claude-swift] Process ' + id + ' exited: code=' + code + ' signal=' + signal);
-        trace('Process ' + id + ' exited: code=' + code);
-        if (self._onExit) self._onExit(id, code || 0, signal || '');
+        trace('Process ' + id + ' exited: code=' + code + ' signal=' + signal);
+        // Preserve null code for signaled exits - don't coerce to 0
+        if (self._onExit) self._onExit(id, code, signal || '');
         self._processes.delete(id);
       });
       proc.on('error', function(err) {
