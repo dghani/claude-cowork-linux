@@ -573,24 +573,6 @@ function canonicalizeResolvableHostPath(hostPath) {
   }
 }
 
-function findNearestExistingAncestor(hostPath) {
-  if (typeof hostPath !== 'string' || hostPath.length === 0) {
-    return hostPath;
-  }
-  let current = path.isAbsolute(hostPath) ? hostPath : path.resolve(hostPath);
-  while (true) {
-    try {
-      return fs.realpathSync(current);
-    } catch (_) {
-      const parent = path.dirname(current);
-      if (parent === current) {
-        return current;
-      }
-      current = parent;
-    }
-  }
-}
-
 function getSessionRootForVmPath(vmPath) {
   return path.join(SESSIONS_BASE, extractSessionNameFromVmPathStrict(vmPath));
 }
