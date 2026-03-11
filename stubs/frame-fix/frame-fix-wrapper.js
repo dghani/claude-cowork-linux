@@ -331,8 +331,8 @@ function getSyntheticIPCResponse(channel) {
   if (channel.includes('isProcessRunning')) {
     return async (...args) => {
       const processId = parseRequestedProcessId(args);
-      const state = await getCoworkProcessRunningState(processId);
-      return state.running; // Return boolean to match stub API
+      // Return object { running, exitCode } - app expects e?.running
+      return getCoworkProcessRunningState(processId);
     };
   }
   return null;
@@ -485,8 +485,8 @@ Module.prototype.require = function(id) {
             }
             if (method === 'isProcessRunning') {
               const processId = parseRequestedProcessId(args);
-              const state = await getCoworkProcessRunningState(processId);
-              return state.running; // Return boolean to match stub API
+              // Return object { running, exitCode } - app expects e?.running
+              return getCoworkProcessRunningState(processId);
             }
 
             // Call original handler for other methods

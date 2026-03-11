@@ -783,8 +783,16 @@ class SwiftAddonStub extends EventEmitter {
                 return Promise.resolve(false);
               }
             } else {
-              openTarget = findNearestExistingAncestor(path.dirname(hostPath));
-              fallbackTarget = openTarget;
+              // For non-session paths, only fall back to immediate parent (not arbitrary ancestors)
+              const parentDir = path.dirname(hostPath);
+              try {
+                fs.accessSync(parentDir, fs.constants.R_OK);
+                openTarget = parentDir;
+                fallbackTarget = parentDir;
+              } catch (_) {
+                console.error('[claude-swift] openFile: target and parent missing:', hostPath);
+                return Promise.resolve(false);
+              }
             }
           }
           execFile('xdg-open', [openTarget], (err) => {
@@ -839,7 +847,15 @@ class SwiftAddonStub extends EventEmitter {
                 return Promise.resolve(false);
               }
             } else {
-              revealDir = findNearestExistingAncestor(path.dirname(hostPath));
+              // For non-session paths, only fall back to immediate parent (not arbitrary ancestors)
+              const parentDir = path.dirname(hostPath);
+              try {
+                fs.accessSync(parentDir, fs.constants.R_OK);
+                revealDir = parentDir;
+              } catch (_) {
+                console.error('[claude-swift] revealFile: target and parent missing:', hostPath);
+                return Promise.resolve(false);
+              }
             }
           }
           if (targetIsFile) {
