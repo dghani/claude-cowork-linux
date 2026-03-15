@@ -284,6 +284,23 @@ find ~/.config/Claude/local-agent-mode-sessions/sessions/ -name "*.jsonl" -path 
 python3 -c "import json; d=json.load(open('$HOME/.config/Claude/LocalAgentModeSessions/sessions.json')); [print(s.get('sessionId','?'), s.get('ccConversationId','MISSING')) for s in d.get('sessions',[])]"
 ```
 
+## Local Additions (not upstream)
+
+### Global Config Symlinks (`symlinkGlobalConfig`)
+Cowork sessions use `CLAUDE_CONFIG_DIR` pointing to a per-session `.claude` dir,
+so the CLI can't find the user's global skills, commands, hooks, settings, or CLAUDE.md.
+On each spawn, `symlinkGlobalConfig()` in `session_orchestrator.js` selectively symlinks
+read-mostly global config from `~/.claude/` into the session dir while keeping
+session-specific dirs (projects, plans, backups) local for transcript isolation.
+
+Symlinked: `commands/`, `skills/`, `agents/`, `hooks/`, `plugins/`, `CLAUDE.md`,
+`settings.json`, `settings.local.json`.
+
+### PKGBUILD Locale Fix
+The app reads locale files (`en-US.json`, etc.) from `process.resourcesPath` at startup,
+which resolves to the system electron's resources dir -- not inside the asar. The PKGBUILD
+installs these JSON files to the electron resources directory.
+
 ## Known Issues
 
 - The `conversation_uuid` validation error in React Query logs is cosmetic (see Chain 3).
