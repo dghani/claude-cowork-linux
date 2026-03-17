@@ -6,7 +6,7 @@ const vm = require('vm');
 const { EventEmitter } = require('events');
 
 function loadFrameFixHelpers(overrides) {
-  const wrapperPath = '/home/zack/dev/claude-cowork-linux-recovery/stubs/frame-fix/frame-fix-wrapper.js';
+  const wrapperPath = path.join(__dirname, '..', '..', '..', 'stubs', 'frame-fix', 'frame-fix-wrapper.js');
   const source = fs.readFileSync(wrapperPath, 'utf8');
   const helperStart = source.indexOf('function wrapAliasedFileSystemHandler');
   const ipcTapEnd = source.indexOf('// ============================================================\n// IPC TAP');

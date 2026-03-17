@@ -128,7 +128,7 @@ test('normalizeSessionRecord repairs relative userSelectedFolders from audit cwd
     JSON.stringify({
       type: 'system',
       subtype: 'init',
-      cwd: '/home/zack/dev/claude-cowork-linux-recovery',
+      cwd: '/home/zack/dev/claude-cowork-linux',
       session_id: 'fresh-cli-session',
       _audit_timestamp: '2026-03-14T10:54:15.948Z',
     }),
@@ -143,8 +143,8 @@ test('normalizeSessionRecord repairs relative userSelectedFolders from audit cwd
     userSelectedFolders: ['./.asar-cache/app.asar'],
   });
 
-  assert.equal(normalized.cwd, '/home/zack/dev/claude-cowork-linux-recovery');
-  assert.deepEqual(normalized.userSelectedFolders, ['/home/zack/dev/claude-cowork-linux-recovery']);
+  assert.equal(normalized.cwd, '/home/zack/dev/claude-cowork-linux');
+  assert.deepEqual(normalized.userSelectedFolders, ['/home/zack/dev/claude-cowork-linux']);
 });
 
 test('local session metadata helpers recognize canonical metadata files', (t) => {
