@@ -74,8 +74,20 @@ if [ -f "$INDEX_JS" ] && grep -q 'titleBarOverlay' "$INDEX_JS"; then
 fi
 
 # Only repack if stub is newer than asar (or asar doesn't exist)
-if [ ! -f "$ASAR_FILE" ] || [ "$STUB_FILE" -nt "$ASAR_FILE" ] || [ "linux-app-extracted/frame-fix-wrapper.js" -nt "$ASAR_FILE" ]; then
-  echo "Repacking app.asar (stub changed)..."
+# Repack if any file in the extracted tree is newer than the cached asar.
+_needs_repack=false
+if [ ! -f "$ASAR_FILE" ]; then
+  _needs_repack=true
+else
+  while IFS= read -r -d '' _f; do
+    if [ "$_f" -nt "$ASAR_FILE" ]; then
+      _needs_repack=true
+      break
+    fi
+  done < <(find linux-app-extracted -type f -print0)
+fi
+if [ "$_needs_repack" = true ]; then
+  echo "Repacking app.asar..."
   asar pack linux-app-extracted "$ASAR_FILE"
 else
   echo "Using cached app.asar (no changes)"

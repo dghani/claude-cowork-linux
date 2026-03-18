@@ -22,8 +22,9 @@ test('vm.mountPath accepts canonical host paths and creates the requested direct
   const modulePath = path.join(tempStubDir, 'index.js');
 
   fs.mkdirSync(tempStubDir, { recursive: true });
-  fs.cpSync('/home/zack/dev/claude-cowork-linux-recovery/stubs/cowork', tempCoworkRoot, { recursive: true });
-  fs.copyFileSync('/home/zack/dev/claude-cowork-linux-recovery/stubs/@ant/claude-swift/js/index.js', modulePath);
+  const repoRoot = path.join(__dirname, '..', '..', '..');
+  fs.cpSync(path.join(repoRoot, 'stubs', 'cowork'), tempCoworkRoot, { recursive: true });
+  fs.copyFileSync(path.join(repoRoot, 'stubs', '@ant', 'claude-swift', 'js', 'index.js'), modulePath);
 
   const script = `
     const addon = require(${JSON.stringify(modulePath)});

@@ -36,13 +36,20 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
-const { createDirs } = require('../../../../cowork/dirs.js');
+const {
+  createDirs,
+  isPathSafe,
+  translateVmPathStrict: _translateVmPathStrict,
+  canonicalizeHostPath,
+  canonicalizeVmPathStrict: _canonicalizeVmPathStrict,
+  canonicalizePathForHostAccess: _canonicalizePathForHostAccess,
+} = require('../../../../cowork/dirs.js');
 const { createSessionStore } = require('../../../../cowork/session_store.js');
 const { createSessionsApi } = require('../../../../cowork/sessions_api.js');
 const { createSessionOrchestrator } = require('../../../../cowork/session_orchestrator.js');
 const { redactCredentials } = require('../../../../cowork/credential_classifier.js');
 
-const DIRS = createDirs();
+const DIRS = global.__coworkDirs || createDirs();
 const CLAUDE_CONFIG_ROOT = DIRS.claudeConfigRoot;
 const LOCAL_AGENT_ROOT = DIRS.claudeLocalAgentRoot;
 
@@ -119,58 +126,18 @@ function filterEnv(baseEnv, additionalEnv) {
   return filtered;
 }
 
-// SECURITY: Validate path doesn't escape intended directory
-function isPathSafe(basePath, targetPath) {
-  const resolved = path.resolve(basePath, targetPath);
-  return resolved.startsWith(path.resolve(basePath) + path.sep) || resolved === path.resolve(basePath);
-}
+const SESSIONS_BASE = DIRS.claudeSessionsBase;
 
-// Sessions directory in user space (not /sessions)
-const SESSIONS_BASE = path.join(LOCAL_AGENT_ROOT, 'sessions');
-
-// SECURITY: Translate a VM-internal /sessions/... path to a validated host path
-// under SESSIONS_BASE. Rejects path traversal attempts. Throws on invalid input.
+// Wrapper over dirs.js translateVmPathStrict that binds SESSIONS_BASE
+// and adds security trace logging before propagating the error.
 function translateVmPathStrict(vmPath) {
-  if (typeof vmPath !== 'string' || !vmPath.startsWith('/sessions/')) {
-    throw new Error('Not a VM path: ' + vmPath);
-  }
-  const sessionPath = vmPath.substring('/sessions/'.length);
-  if (sessionPath.includes('..') || !isPathSafe(SESSIONS_BASE, sessionPath)) {
-    trace('SECURITY: Path traversal blocked: ' + vmPath);
-    throw new Error('Path traversal blocked: ' + vmPath);
-  }
-  return path.join(SESSIONS_BASE, sessionPath);
-}
-
-// Resolve symlinks in a host path to its canonical form.
-// For nonexistent targets (write paths), walks up to the nearest existing
-// ancestor, canonicalizes that, then reattaches the remaining segments.
-// Never accepts raw /sessions/... paths — caller must translate first.
-function canonicalizeHostPath(hostPath) {
-  if (typeof hostPath !== 'string') {
-    return hostPath;
-  }
-  if (hostPath.startsWith('/sessions/')) {
-    throw new Error('canonicalizeHostPath called with raw VM path: ' + hostPath);
-  }
-  if (!path.isAbsolute(hostPath)) {
-    return hostPath;
-  }
   try {
-    return fs.realpathSync(hostPath);
-  } catch (_) {
-    const segments = [];
-    let current = path.dirname(hostPath);
-    segments.push(path.basename(hostPath));
-    while (current !== path.dirname(current)) {
-      try {
-        return path.join(fs.realpathSync(current), ...segments);
-      } catch (_) {
-        segments.unshift(path.basename(current));
-        current = path.dirname(current);
-      }
+    return _translateVmPathStrict(SESSIONS_BASE, vmPath);
+  } catch (err) {
+    if (err.message.includes('Path traversal')) {
+      trace('SECURITY: ' + err.message);
     }
-    return hostPath;
+    throw err;
   }
 }
 
@@ -685,17 +652,21 @@ function findSessionName(args, envVars, sharedCwdPath) {
 }
 
 function canonicalizeVmPathStrict(vmPath) {
-  return canonicalizeHostPath(translateVmPathStrict(vmPath));
+  try {
+    return _canonicalizeVmPathStrict(SESSIONS_BASE, vmPath);
+  } catch (err) {
+    if (err.message.includes('Path traversal')) {
+      trace('SECURITY: ' + err.message);
+    }
+    throw err;
+  }
 }
 
 // Route VM paths through strict validation+canonicalization, host paths
 // through canonicalizeHostPath. Used by files.* and other surfaces that
 // receive paths from the asar without knowing the path type.
 function canonicalizePathForHostAccess(inputPath) {
-  if (typeof inputPath === 'string' && inputPath.startsWith('/sessions/')) {
-    return canonicalizeVmPathStrict(inputPath);
-  }
-  return canonicalizeHostPath(inputPath);
+  return _canonicalizePathForHostAccess(SESSIONS_BASE, inputPath);
 }
 
 // For arbitrary host paths from desktop integrations, avoid ancestor walking
@@ -769,7 +740,7 @@ class SwiftAddonStub extends EventEmitter {
       active: false,
       language: 'en-US',
     };
-    this._sessionStore = createSessionStore({
+    this._sessionStore = global.__coworkSessionStore || createSessionStore({
       localAgentRoot: LOCAL_AGENT_ROOT,
     });
     this._sessionsApi = createSessionsApi({

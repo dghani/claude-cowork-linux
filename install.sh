@@ -143,7 +143,7 @@ install_dependencies() {
 # ============================================================
 
 setup_repo() {
-    if [[ -d "$INSTALL_DIR/.git" ]]; then
+    if git -C "$INSTALL_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         log_info "Updating existing installation..."
         git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || log_info "Local modifications present, using existing version"
         log_success "Repository updated"

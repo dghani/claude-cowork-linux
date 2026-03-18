@@ -37,6 +37,20 @@ No. As of v4.0.0, Python is optional. DMG auto-download uses Node.js (`fetch-dmg
 
 </details>
 
+<details>
+<summary><strong>install.sh deletes my existing checkout and fails to clone</strong></summary>
+
+**Symptom**: The installer logs `Removing previous (non-git) installation` then fails with `fatal: Unable to read current working directory: No such file or directory`.
+
+**Cause**: The installer checks for a `.git` directory to detect an existing repo. Git worktrees use a `.git` **file** instead, so the check fails, the installer deletes the directory (including its own CWD), and the subsequent clone fails.
+
+**Fix**: Updated in v4.0.1. The installer now uses `git rev-parse` to detect any git repo (clones, worktrees, submodules). If you're on an older version, update:
+```bash
+cd ~/.local/share/claude-desktop && git pull
+```
+
+</details>
+
 ---
 
 ## Login and Auth

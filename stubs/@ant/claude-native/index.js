@@ -23,20 +23,23 @@ const EventEmitter = require('events');
 const path = require('path');
 const fs = require('fs');
 const { createDirs } = require('../../cowork/dirs.js');
+const { redactCredentials } = require('../../cowork/credential_classifier.js');
 
 const LOG_PREFIX = '[claude-native-stub]';
-const DIRS = createDirs();
+const DIRS = global.__coworkDirs || createDirs();
 
 function log(...args) {
   console.log(LOG_PREFIX, ...args);
 }
 
 function trace(category, msg, data = null) {
+  const safeMsg = typeof msg === 'string' ? redactCredentials(msg) : msg;
+  const safeData = data != null ? JSON.parse(redactCredentials(JSON.stringify(data))) : null;
   const entry = {
     ts: new Date().toISOString(),
     cat: category,
-    msg,
-    data
+    msg: safeMsg,
+    data: safeData,
   };
   // Write to trace file if CLAUDE_NATIVE_TRACE is set
   if (process.env.CLAUDE_NATIVE_TRACE) {

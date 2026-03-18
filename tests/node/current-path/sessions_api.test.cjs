@@ -61,11 +61,11 @@ test('ensureSession looks up a partial remote mapping before falling back to cre
   });
 
   const result = sessionsApi.ensureSession({
-    cwd: '/home/zack/dev/claude-cowork-linux-recovery',
+    cwd: '/home/zack/dev/claude-cowork-linux',
     localSessionId: 'local_demo_session',
     model: 'claude-opus-4-6',
     remoteSessionId: 'remote-stale',
-    userSelectedFolders: ['/home/zack/dev/claude-cowork-linux-recovery'],
+    userSelectedFolders: ['/home/zack/dev/claude-cowork-linux'],
   });
 
   assert.equal(result.success, true);
@@ -83,7 +83,7 @@ test('ensureSession looks up a partial remote mapping before falling back to cre
   assert.equal(seenRequests[1].headers.Authorization, 'Bearer oauth-token');
   assert.equal(seenRequests[1].headers['x-organization-uuid'], 'org-uuid');
   assert.deepEqual(JSON.parse(seenRequests[1].body), {
-    title: 'claude-cowork-linux-recovery',
+    title: 'claude-cowork-linux',
     events: [],
     permission_mode: 'default',
     session_context: {
@@ -92,7 +92,7 @@ test('ensureSession looks up a partial remote mapping before falling back to cre
       sources: [],
     },
     source: 'remote-control',
-    workspace_roots: ['/home/zack/dev/claude-cowork-linux-recovery'],
+    workspace_roots: ['/home/zack/dev/claude-cowork-linux'],
   });
 });
 
@@ -118,7 +118,7 @@ test('ensureSession reads desktop auth from the inherited file descriptor and fa
   });
 
   const result = sessionsApi.ensureSession({
-    cwd: '/home/zack/dev/claude-cowork-linux-recovery',
+    cwd: '/home/zack/dev/claude-cowork-linux',
     localSessionId: 'local_demo_session',
     model: 'claude-opus-4-6',
     organizationUuid: 'org-uuid',
@@ -150,7 +150,7 @@ test('ensureSession falls back to the default Sessions API base URL when the cal
   });
 
   const result = sessionsApi.ensureSession({
-    cwd: '/home/zack/dev/claude-cowork-linux-recovery',
+    cwd: '/home/zack/dev/claude-cowork-linux',
     localSessionId: 'local_demo_session',
   });
 

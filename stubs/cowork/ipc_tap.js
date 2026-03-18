@@ -7,6 +7,15 @@ const { parseEipcChannel, classifyMethod, isPlatformError } = require('./eipc_ch
 
 const MAX_PAYLOAD_LENGTH = 4000;
 
+function defaultLogDir() {
+  if (process.env.CLAUDE_LOG_DIR) return process.env.CLAUDE_LOG_DIR;
+  const os = require('os');
+  const path = require('path');
+  const xdgStateHome = process.env.XDG_STATE_HOME ||
+    path.join(os.homedir(), '.local', 'state');
+  return path.join(xdgStateHome, 'claude-cowork', 'logs');
+}
+
 function truncatePayload(value) {
   if (value === undefined) return undefined;
   const str = typeof value === 'string' ? value : JSON.stringify(value);
@@ -25,8 +34,8 @@ function safeSerialize(value) {
 
 function createIpcTap(options) {
   const {
-    logDir = null,
-    enabled = false,
+    logDir = defaultLogDir(),
+    enabled = process.env.CLAUDE_COWORK_IPC_TAP === '1',
   } = options || {};
 
   if (!enabled) {

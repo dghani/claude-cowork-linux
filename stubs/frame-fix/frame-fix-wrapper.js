@@ -14,6 +14,7 @@ const { createDirs } = require('./cowork/dirs.js');
 const { createSessionOrchestrator } = require('./cowork/session_orchestrator.js');
 const { createSessionStore } = require('./cowork/session_store.js');
 const { createIpcTap } = require('./cowork/ipc_tap.js');
+const { createOverrideRegistry, matchOverride, extractEipcUuid, proactivelyRegisterOverrides, isProactiveChannel } = require('./cowork/ipc_overrides.js');
 
 console.log('[Frame Fix] Wrapper v2.5 loaded');
 
@@ -275,14 +276,8 @@ function installLinuxMenuInterceptors(electronModule) {
 // ============================================================
 // IPC TAP — must be created before the early ipcMain patch so
 // it can instrument _invokeHandlers before any asar code runs.
-// Uses a provisional log dir since DIRS isn't available yet.
 // ============================================================
-const ipcTap = createIpcTap({
-  enabled: process.env.CLAUDE_COWORK_IPC_TAP === '1',
-  logDir: process.env.CLAUDE_LOG_DIR ||
-    (process.env.XDG_STATE_HOME || require('path').join(require('os').homedir(), '.local', 'state'))
-    + '/claude-cowork/logs',
-});
+const ipcTap = createIpcTap();
 
 // ============================================================
 // CRITICAL: Patch ipcMain IMMEDIATELY before any asar code runs
@@ -291,27 +286,18 @@ const ipcTap = createIpcTap({
 // and never calls Map.get() from JavaScript. Synthetic handlers MUST be
 // registered via ipcMain.handle() to land in Electron's C++ dispatch map.
 // The .set() override here only wraps filesystem handlers with alias
-// rewriting. Linux-specific EIPC overrides (ClaudeCode, ClaudeVM, etc.) are
-// installed on webContents.ipc by installWebContentsIpcOverrides().
+// rewriting. Linux IPC overrides are applied at registration time via
+// matchOverride() in both ipcMain.handle() and webContents.ipc.handle().
 try {
   const electron = require('electron');
   const { ipcMain } = electron;
-  if (ipcMain && ipcMain._invokeHandlers && !global.__coworkIpcMainPatched) {
-    global.__coworkIpcMainPatched = true;
+  if (ipcMain && ipcMain._invokeHandlers && !global.__coworkIpcMainAliasPatched) {
+    global.__coworkIpcMainAliasPatched = true;
     const invokeHandlers = ipcMain._invokeHandlers;
     // Tap _invokeHandlers BEFORE our overrides so the tap sees raw handler behavior
     if (ipcTap.enabled) ipcTap.wrapInvokeHandlers(invokeHandlers);
     const originalSet = invokeHandlers.set.bind(invokeHandlers);
     invokeHandlers.set = function(channel, handler) {
-      // Extract EIPC prefix from the first channel that matches the pattern.
-      // This is more reliable than reading files from inside the asar.
-      if (!global.__coworkEipcPrefix && typeof channel === 'string') {
-        const eipcMatch = channel.match(/^(\$eipc_message\$_[a-f0-9-]+_\$_)claude\.(web|hybrid|settings)_\$_/);
-        if (eipcMatch) {
-          global.__coworkEipcPrefix = eipcMatch[1] + 'claude.web_$_';
-          console.log('[Cowork] Discovered EIPC prefix from handler registration: ' + global.__coworkEipcPrefix);
-        }
-      }
       return originalSet(channel, wrapAliasedFileSystemHandler(channel, handler, () => global.__coworkAsarAdapter || null));
     };
     console.log('[Cowork] ipcMain._invokeHandlers patched (filesystem aliasing)');
@@ -344,6 +330,9 @@ const asarAdapter = createAsarAdapter({
   sessionStore: localSessionStore,
 });
 global.__coworkAsarAdapter = asarAdapter;
+global.__coworkSessionStore = localSessionStore;
+global.__coworkSessionOrchestrator = ipcSessionOrchestrator;
+global.__coworkDirs = DIRS;
 localSessionStore.installMetadataPersistenceGuard();
 global.__coworkIpcTap = ipcTap;
 
@@ -515,37 +504,9 @@ global.__cowork = {
   processes: new Map(),
 };
 
-// Keep the bootstrap wrapper aligned with the swift stub's session root.
-const SESSIONS_BASE = path.join(LOCAL_AGENT_ROOT, 'sessions');
-try { fs.mkdirSync(SESSIONS_BASE, { recursive: true, mode: 0o700 }); } catch(e) {}
+const SESSIONS_BASE = DIRS.claudeSessionsBase;
 
-// Override getYukonSilverSupportStatus globally
-// The bundled code might look for this function
-global.getYukonSilverSupportStatus = function() {
-  console.log('[Cowork] getYukonSilverSupportStatus intercepted - returning supported');
-  return 'supported';
-};
-
-// Try to intercept via prototype pollution on common patterns
-// The app might use an object like: vmStatus.getStatus() or vmSupport.getSupportStatus()
-const originalDefineProperty = Object.defineProperty;
-Object.defineProperty = function(target, key, descriptor) {
-  // Intercept any property that looks like it returns support status
-  if (typeof key === 'string' && (key.includes('SupportStatus') || key === 'status' || key === 'supported')) {
-    if (descriptor && typeof descriptor.value === 'function') {
-      const original = descriptor.value;
-      descriptor.value = function(...args) {
-        const result = original.apply(this, args);
-        if (result === 'unsupported') {
-          console.log(`[Cowork] Intercepted ${key} returning unsupported -> supported`);
-          return 'supported';
-        }
-        return result;
-      };
-    }
-  }
-  return originalDefineProperty.call(this, target, key, descriptor);
-};
+// Items 9, 10: dead support-status overrides removed (handled by IPC stubs).
 
 console.log('[Cowork] Linux support enabled - VM will be emulated');
 
@@ -644,152 +605,15 @@ function logIgnoredLiveMessage(channel, payload, messageType) {
   global.__coworkIgnoredLiveMessageStats.set(key, current);
 }
 
-function getSyntheticIPCResponse(channel) {
-  if (typeof channel !== 'string') {
-    return null;
-  }
-  if (channel.includes('ComputerUseTcc_$_getState')) {
-    return async () => ({
-      accessibility: 'denied',
-      screenCapture: 'denied',
-      canPrompt: false,
-    });
-  }
-  if (channel.includes('ComputerUseTcc_$_requestAccess')) {
-    return async () => ({
-      success: false,
-      accessibility: 'denied',
-      screenCapture: 'denied',
-      canPrompt: false,
-    });
-  }
-  if (channel.includes('isProcessRunning')) {
-    return async (...args) => {
-      const processId = parseRequestedProcessId(args);
-      // Return object { running, exitCode } - app expects e?.running
-      return getCoworkProcessRunningState(processId);
-    };
-  }
-  // ClaudeCode handlers - stub out for Linux to enable the Code tab
-  if (channel.includes('ClaudeCode_$_getStatus')) {
-    return async () => ({
-      status: 'ready',
-      ready: true,
-      installed: true,
-      downloading: false,
-      progress: 100,
-      version: '2.1.72',
-    });
-  }
-  if (channel.includes('ClaudeCode_$_prepare')) {
-    return async () => ({ ready: true, success: true });
-  }
-  return null;
-}
-
 // ============================================================
-// EIPC HANDLER OVERRIDES — webContents.ipc (Electron 23+)
+// IPC OVERRIDE REGISTRY — single source of truth for all Linux overrides.
+// Applied at registration time on both ipcMain.handle() and
+// webContents.ipc.handle() via matchOverride(channel, overrides).
 // ============================================================
-// The asar registers EIPC handlers on webContents.ipc (per-window IPC), NOT
-// on ipcMain. This means ipcMain.handle() patches never intercept them.
-//
-// Strategy: after the asar's synchronous initialization completes for each
-// BrowserWindow, remove its broken Linux-incompatible handlers and register
-// our working replacements. No monkey-patching of internal APIs needed —
-// just standard removeHandler + handle on the webContents.ipc object.
-//
-// The EIPC UUID is extracted from the asar's build artifacts at startup.
-
-function discoverEipcPrefix() {
-  // Primary: already extracted from _invokeHandlers.set() at startup
-  if (global.__coworkEipcPrefix) return global.__coworkEipcPrefix;
-
-  // Fallback: read from the asar's build files (may fail inside packed asar)
-  try {
-    const buildDir = path.join(
-      path.dirname(require.main ? require.main.filename : __filename),
-      '.vite', 'build'
-    );
-    const candidates = ['mainView.js', 'aboutWindow.js', 'index.js'];
-    for (const candidate of candidates) {
-      try {
-        const filePath = path.join(buildDir, candidate);
-        const text = fs.readFileSync(filePath, 'utf8');
-        const match = text.match(/\$eipc_message\$_([a-f0-9-]+)_\$_/);
-        if (match) {
-          global.__coworkEipcPrefix = '$eipc_message$_' + match[1] + '_$_claude.web_$_';
-          console.log('[Cowork] Discovered EIPC prefix from build file: ' + candidate);
-          return global.__coworkEipcPrefix;
-        }
-      } catch (e) {
-        console.warn('[Cowork] EIPC fallback: failed to read ' + candidate + ': ' + e.code);
-      }
-    }
-  } catch (e) {
-    console.warn('[Cowork] EIPC fallback: buildDir error: ' + e.message);
-  }
-  console.error('[Cowork] EIPC prefix not yet available (will retry on next webContents)');
-  return null;
-}
-
-// Handlers to override on each webContents.ipc. Defined once, applied per-window.
-function getLinuxIpcOverrides() {
-  return {
-    'ClaudeCode_$_getStatus': async () => ({
-      status: 'ready',
-      ready: true,
-      installed: true,
-      downloading: false,
-      progress: 100,
-      version: '2.1.72',
-    }),
-    'ClaudeCode_$_prepare': async () => ({ ready: true, success: true }),
-    'ClaudeCode_$_checkGitAvailable': async () => ({ available: true }),
-    'ComputerUseTcc_$_getState': async () => ({ granted: true, status: 'granted' }),
-    'ComputerUseTcc_$_requestAccess': async () => ({ granted: true }),
-    'ClaudeVM_$_getRunningStatus': async () => ({
-      running: true, connected: true, ready: true, status: 'running',
-    }),
-    'ClaudeVM_$_getDownloadStatus': async () => ({
-      status: 'ready', downloaded: true, installed: true, progress: 100,
-    }),
-    'ClaudeVM_$_isSupported': async () => 'supported',
-    'ClaudeVM_$_getSupportStatus': async () => 'supported',
-    'ClaudeVM_$_isProcessRunning': async (...args) => {
-      const processId = parseRequestedProcessId(args);
-      return getCoworkProcessRunningState(processId);
-    },
-  };
-}
-
-function installWebContentsIpcOverrides(contents) {
-  if (!contents.ipc || contents.ipc.__coworkOverridesDone) return;
-  contents.ipc.__coworkOverridesDone = true;
-
-  const prefix = discoverEipcPrefix();
-  if (!prefix) return;
-
-  const overrides = getLinuxIpcOverrides();
-
-  // Schedule after the current tick so the asar's synchronous handler
-  // registration (c3t(webContents)) completes first. Then we replace.
-  process.nextTick(() => {
-    let count = 0;
-    for (const [suffix, handler] of Object.entries(overrides)) {
-      const channel = prefix + suffix;
-      try {
-        contents.ipc.removeHandler(channel);
-      } catch (_) {}
-      try {
-        contents.ipc.handle(channel, handler);
-        count++;
-      } catch (e) {
-        console.error('[Cowork] Failed to register ' + suffix + ': ' + e.message);
-      }
-    }
-    console.log('[Cowork] Installed ' + count + ' EIPC overrides on webContents.ipc');
-  });
-}
+const ipcOverrides = createOverrideRegistry(function getProcessState(args) {
+  const processId = parseRequestedProcessId(args);
+  return getCoworkProcessRunningState(processId);
+});
 
 // ============================================================
 // GRACEFUL SHUTDOWN — on Linux, closing all windows must quit the
@@ -870,107 +694,44 @@ Module.prototype.require = function(id) {
 
     // Intercept ipcMain.handle to inject our VM handlers
     const { ipcMain } = module;
-    if (ipcMain && !global.__coworkIPCPatched) {
-      global.__coworkIPCPatched = true;
+    // Hoisted to outer scope so webContents.ipc.handle() patch can reference them
+    let originalHandle;
+    let originalRemoveHandler;
+    if (ipcMain && !global.__coworkIpcHandlePatched) {
+      global.__coworkIpcHandlePatched = true;
 
-      const invokeHandlers = ipcMain._invokeHandlers;
-      if (invokeHandlers && !global.__coworkInvokeHandlersPatched) {
-        global.__coworkInvokeHandlersPatched = true;
-        const originalHas = invokeHandlers.has.bind(invokeHandlers);
-        const originalSet = invokeHandlers.set.bind(invokeHandlers);
-        invokeHandlers.has = function(channel) {
-          return originalHas(channel) || !!getSyntheticIPCResponse(channel);
-        };
-        invokeHandlers.set = function(channel, handler) {
-          return originalSet(channel, asarAdapter.wrapHandler(channel, handler));
-        };
-        console.log('[Cowork] _invokeHandlers patched (filesystem wrapping)');
-      }
 
       // Wire IPC tap before capturing originalHandle so the tap sees raw handler
       // behavior (before our overrides). Only active when CLAUDE_COWORK_IPC_TAP=1.
       if (ipcTap.enabled) {
         ipcTap.wrapHandle(ipcMain);
       }
-      const originalHandle = ipcMain.handle.bind(ipcMain);
+      originalHandle = ipcMain.handle.bind(ipcMain);
+      originalRemoveHandler = ipcMain.removeHandler ? ipcMain.removeHandler.bind(ipcMain) : (() => {});
+
+      // Protect proactively registered channels from being removed by the asar
+      if (ipcMain.removeHandler) {
+        ipcMain.removeHandler = function(channel) {
+          if (isProactiveChannel(channel)) return;
+          return originalRemoveHandler(channel);
+        };
+      }
+
       ipcMain.handle = function(channel, handler) {
-        const syntheticHandler = getSyntheticIPCResponse(channel);
-        if (syntheticHandler) {
-          console.log(`[Cowork] Intercepting synthetic IPC handler: ${channel}`);
-          return originalHandle(channel, syntheticHandler);
+        // Extract UUID from first EIPC channel and proactively register all overrides.
+        // Handlers like ComputerUseTcc are never registered by the asar on Linux
+        // (macOS-only native dependency), so registration-time interception can't
+        // catch them. Proactive registration on ipcMain provides a fallback.
+        const uuid = extractEipcUuid(channel);
+        if (uuid) {
+          proactivelyRegisterOverrides(originalHandle, originalRemoveHandler, ipcOverrides, uuid);
         }
 
-        // Intercept ClaudeVM handlers to inject our Linux implementation
-        if (channel.includes('ClaudeVM')) {
-          console.log(`[Cowork] Intercepting ClaudeVM handler: ${channel}`);
-
-          // Wrap the handler to override certain methods
-          const wrappedHandler = async (...args) => {
-            const method = channel.split('_$_').pop();
-            console.log(`[Cowork] ClaudeVM.${method} called`);
-
-            // Override specific methods for Linux
-            if (method === 'getRunningStatus') {
-              return { running: true, connected: true, ready: true, status: 'running' };
-            }
-            if (method === 'getDownloadStatus') {
-              return { status: 'ready', downloaded: true, installed: true, progress: 100 };
-            }
-            if (method === 'isSupported' || method === 'getSupportStatus') {
-              return 'supported';
-            }
-            if (method === 'isProcessRunning') {
-              const processId = parseRequestedProcessId(args);
-              // Return object { running, exitCode } - app expects e?.running
-              return getCoworkProcessRunningState(processId);
-            }
-
-            // Call original handler for other methods
-            try {
-              return await handler(...args);
-            } catch(e) {
-              console.log(`[Cowork] ClaudeVM.${method} handler error:`, e.message);
-              return null;
-            }
-          };
-          return originalHandle(channel, wrappedHandler);
+        const overrideHandler = matchOverride(channel, ipcOverrides);
+        if (overrideHandler) {
+          if (isProactiveChannel(channel)) return; // Already registered proactively
+          return originalHandle(channel, overrideHandler);
         }
-
-        // Intercept ClaudeCode handlers for the Code tab feature
-        if (channel.includes('ClaudeCode')) {
-          console.log(`[Cowork] Intercepting ClaudeCode handler: ${channel}`);
-
-          const wrappedHandler = async (...args) => {
-            const method = channel.split('_$_').pop();
-            console.log(`[Cowork] ClaudeCode.${method} called`);
-
-            // Override specific methods for Linux - return "ready" status
-            if (method === 'getStatus') {
-              return {
-                status: 'ready',
-                ready: true,
-                installed: true,
-                downloading: false,
-                progress: 100,
-                version: '2.1.72',
-              };
-            }
-            if (method === 'prepare') {
-              return { ready: true, success: true };
-            }
-
-            // Call original handler for other methods
-            try {
-              return await handler(...args);
-            } catch(e) {
-              console.log(`[Cowork] ClaudeCode.${method} handler error:`, e.message);
-              // Return a safe default instead of throwing
-              return { ready: true, status: 'ready' };
-            }
-          };
-          return originalHandle(channel, wrappedHandler);
-        }
-
         return originalHandle(channel, asarAdapter.wrapHandler(channel, handler));
       };
 
@@ -1042,11 +803,28 @@ Module.prototype.require = function(id) {
       patchEventDispatch(contents);
       if (ipcTap.enabled) ipcTap.wrapWebContents(contents);
 
-      // EIPC override: The asar registers handlers on webContents.ipc (Electron 23+
-      // per-window IPC), NOT ipcMain. After the asar's sync initialization completes,
-      // replace its broken Linux-incompatible handlers with our working versions.
-      if (contents.ipc && typeof contents.ipc.handle === 'function') {
-        installWebContentsIpcOverrides(contents);
+      // Patch webContents.ipc.handle() to intercept handler registration.
+      // When the asar calls contents.ipc.handle(channel, handler), we
+      // check the channel suffix against our override registry and
+      // substitute our handler if matched. No UUID discovery needed.
+      if (contents.ipc && typeof contents.ipc.handle === 'function' && !contents.ipc.__coworkHandlePatched) {
+        contents.ipc.__coworkHandlePatched = true;
+        const origIpcHandle = contents.ipc.handle.bind(contents.ipc);
+        contents.ipc.handle = function(channel, handler) {
+          // Extract UUID and proactively register overrides on ipcMain for
+          // handlers the asar never registers (ComputerUseTcc, CoworkSpaces).
+          const uuid = extractEipcUuid(channel);
+          if (uuid) {
+            proactivelyRegisterOverrides(originalHandle, originalRemoveHandler, ipcOverrides, uuid);
+          }
+
+          const overrideHandler = matchOverride(channel, ipcOverrides);
+          if (overrideHandler) {
+            return origIpcHandle(channel, overrideHandler);
+          }
+          return origIpcHandle(channel, asarAdapter.wrapHandler(channel, handler));
+        };
+        console.log('[Cowork] webContents.ipc.handle() patched for override interception');
       }
     }, 'web-contents-created');
 
@@ -1065,88 +843,6 @@ Module.prototype.require = function(id) {
     }
     installLinuxMenuInterceptors(module);
 
-    // Intercept shell.showItemInFolder to translate VM paths for scratchpad/file links
-    if (module.shell && !global.__coworkShellPatched) {
-      global.__coworkShellPatched = true;
-      const originalShowItemInFolder = module.shell.showItemInFolder.bind(module.shell);
-      const originalOpenPath = typeof module.shell.openPath === 'function'
-        ? module.shell.openPath.bind(module.shell)
-        : null;
-      module.shell.showItemInFolder = function(fullPath) {
-        let resolvedPath = fullPath;
-        let candidatePath = null;
-        let sessionRoot = null;
-        if (typeof fullPath === 'string') {
-          if (fullPath.startsWith('/sessions/')) {
-            const sessionPath = fullPath.substring('/sessions/'.length);
-            const sessionName = sessionPath.split('/')[0];
-            if (!sessionName || sessionName === '.' || sessionName === '..' || sessionName.includes('/')) {
-              console.error('[Frame Fix] shell.showItemInFolder: invalid session name:', fullPath);
-              return false;
-            }
-            sessionRoot = path.join(SESSIONS_BASE, sessionName);
-            candidatePath = path.resolve(path.join(SESSIONS_BASE, sessionPath));
-          } else if (fullPath === SESSIONS_BASE || fullPath.startsWith(SESSIONS_BASE + path.sep)) {
-            const sessionRelative = path.relative(SESSIONS_BASE, fullPath);
-            const sessionName = sessionRelative.split(path.sep)[0];
-            if (!sessionName || sessionName === '.' || sessionName === '..' || sessionName.includes('/')) {
-              console.error('[Frame Fix] shell.showItemInFolder: invalid host session path:', fullPath);
-              return false;
-            }
-            sessionRoot = path.join(SESSIONS_BASE, sessionName);
-            candidatePath = path.resolve(fullPath);
-          }
-        }
-        if (candidatePath && sessionRoot) {
-          // Validate containment lexically within the session tree, then canonicalize
-          // through mnt symlinks so the file manager lands on the real host location.
-          const relativeToRoot = path.relative(sessionRoot, candidatePath);
-          if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot)) {
-            console.error('[Frame Fix] shell.showItemInFolder: path escapes session root:', fullPath, '->', candidatePath);
-            return false;
-          }
-          try {
-            resolvedPath = fs.realpathSync(candidatePath);
-          } catch (_) {
-            let current = path.dirname(candidatePath);
-            let foundAncestor = false;
-            while (current !== path.dirname(current)) {
-              const relative = path.relative(sessionRoot, current);
-              if (relative.startsWith('..') || path.isAbsolute(relative)) {
-                console.error('[Frame Fix] shell.showItemInFolder: no valid ancestor inside session root:', fullPath);
-                return false;
-              }
-              try {
-                resolvedPath = fs.realpathSync(current);
-                foundAncestor = true;
-                break;
-              } catch (_) {
-                current = path.dirname(current);
-              }
-            }
-            if (!foundAncestor) {
-              console.error('[Frame Fix] shell.showItemInFolder: no valid ancestor found:', fullPath);
-              return false;
-            }
-          }
-          console.log('[Frame Fix] shell.showItemInFolder translated:', fullPath, '->', resolvedPath);
-        }
-        try {
-          const stats = typeof resolvedPath === 'string' ? fs.statSync(resolvedPath) : null;
-          if (stats && stats.isDirectory()) {
-            console.log('[Frame Fix] shell.showItemInFolder opening directory directly:', resolvedPath);
-            if (originalOpenPath) {
-              originalOpenPath(resolvedPath).catch((err) => {
-                console.error('[Frame Fix] shell.openPath failed for directory:', resolvedPath, err && err.message ? err.message : err);
-              });
-              return true;
-            }
-          }
-        } catch (_) {}
-        return originalShowItemInFolder(resolvedPath);
-      };
-      console.log('[Frame Fix] shell.showItemInFolder patched for VM path translation');
-    }
   }
 
   return module;
