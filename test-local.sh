@@ -27,6 +27,12 @@ cp -v "$REPO_DIR/stubs/@ant/claude-swift/js/index.js" "$EXTRACTED_DIR/node_modul
 cp -v "$REPO_DIR/stubs/@ant/claude-native/index.js" "$INSTALL_DIR/stubs/@ant/claude-native/index.js"
 cp -v "$REPO_DIR/stubs/@ant/claude-native/index.js" "$EXTRACTED_DIR/node_modules/@ant/claude-native/index.js"
 
+# Copy cowork orchestration modules
+if [ -d "$REPO_DIR/stubs/cowork" ]; then
+    mkdir -p "$EXTRACTED_DIR/cowork"
+    cp -v "$REPO_DIR"/stubs/cowork/*.js "$EXTRACTED_DIR/cowork/"
+fi
+
 # Clear asar cache to force rebuild
 if [ -d "$INSTALL_DIR/.asar-cache" ]; then
     rm -rf "$INSTALL_DIR/.asar-cache"/*
