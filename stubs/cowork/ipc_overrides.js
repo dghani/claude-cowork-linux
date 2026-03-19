@@ -201,9 +201,9 @@ function createOverrideRegistry(getProcessState) {
     'ComputerUseTcc_$_getCurrentSessionGrants': async () => ([]),
     'ComputerUseTcc_$_revokeGrant': async () => {},
 
-    // ClaudeVM — report VM as running and ready
-    'ClaudeVM_$_getRunningStatus': async () => ({ ...CLAUDE_VM_RUNNING_STATUS }),
-    'ClaudeVM_$_getDownloadStatus': async () => ({ ...CLAUDE_VM_DOWNLOAD_STATUS }),
+    // ClaudeVM — report VM as running and ready (webapp expects string "ready")
+    'ClaudeVM_$_getRunningStatus': async () => CLAUDE_VM_RUNNING_STATUS,
+    'ClaudeVM_$_getDownloadStatus': async () => CLAUDE_VM_DOWNLOAD_STATUS,
     'ClaudeVM_$_isSupported': async () => 'supported',
     'ClaudeVM_$_getSupportStatus': async () => 'supported',
     'ClaudeVM_$_checkVirtualMachinePlatform': async () => ({ supported: true }),

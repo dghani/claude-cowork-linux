@@ -190,15 +190,13 @@ describe('Audit Item 1: IPC stub response consistency (CONSOLIDATED)', () => {
   });
 
   it('exports canonical ClaudeVM_$_getRunningStatus response', () => {
-    assert.deepEqual(stubs.CLAUDE_VM_RUNNING_STATUS, {
-      running: true, connected: true, ready: true, status: 'running',
-    });
+    // Webapp compares with "ready" === vmRunningStatus (string, not object)
+    assert.strictEqual(stubs.CLAUDE_VM_RUNNING_STATUS, 'ready');
   });
 
   it('exports canonical ClaudeVM_$_getDownloadStatus response', () => {
-    assert.deepEqual(stubs.CLAUDE_VM_DOWNLOAD_STATUS, {
-      status: 'ready', downloaded: true, installed: true, progress: 100,
-    });
+    // Webapp compares with "ready" === vmDownloadStatus (string, not object)
+    assert.strictEqual(stubs.CLAUDE_VM_DOWNLOAD_STATUS, 'ready');
   });
 
   it('exports both TCC variants (denied for early stubs, granted for webContents)', () => {
@@ -208,7 +206,8 @@ describe('Audit Item 1: IPC stub response consistency (CONSOLIDATED)', () => {
 
   it('response objects are frozen to prevent accidental mutation', () => {
     assert.ok(Object.isFrozen(stubs.CLAUDE_CODE_STATUS));
-    assert.ok(Object.isFrozen(stubs.CLAUDE_VM_RUNNING_STATUS));
+    // VM status values are now strings ("ready"), which are inherently immutable
+    assert.strictEqual(typeof stubs.CLAUDE_VM_RUNNING_STATUS, 'string');
   });
 });
 
