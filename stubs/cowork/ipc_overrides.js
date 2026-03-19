@@ -297,6 +297,22 @@ function createOverrideRegistry(getProcessState) {
       }
     },
 
+    // Menu — Linux has no native menu bar; serve popup from stored application menu
+    'MainWindowTitleBar_$_requestMainMenuPopup': async (event) => {
+      const menu = global.__coworkApplicationMenu;
+      if (!menu || typeof menu.popup !== 'function') return;
+      const { BrowserWindow } = require('electron');
+      const win = event?.sender ? BrowserWindow.fromWebContents(event.sender) : BrowserWindow.getFocusedWindow();
+      try { menu.popup({ window: win || undefined }); } catch (_) {}
+    },
+    'BrowserNavigation_$_requestMainMenuPopup': async (event) => {
+      const menu = global.__coworkApplicationMenu;
+      if (!menu || typeof menu.popup !== 'function') return;
+      const { BrowserWindow } = require('electron');
+      const win = event?.sender ? BrowserWindow.fromWebContents(event.sender) : BrowserWindow.getFocusedWindow();
+      try { menu.popup({ window: win || undefined }); } catch (_) {}
+    },
+
     // CoworkSpaces — not implemented on Linux
     'CoworkSpaces_$_getAllSpaces': async () => ([]),
   };

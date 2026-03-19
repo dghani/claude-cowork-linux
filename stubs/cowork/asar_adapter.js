@@ -346,10 +346,11 @@ function describeFileSystemRelinkIpcSurface() {
 
 class AsarAdapter {
   constructor(options) {
-    const { sessionOrchestrator, sessionStore } = options || {};
+    const { sessionOrchestrator, sessionStore, localSessionBridge } = options || {};
     this._allowActiveSessionFallback = !!(options && options.allowActiveSessionFallback);
     this._sessionOrchestrator = sessionOrchestrator || null;
     this._sessionStore = sessionStore;
+    this._localSessionBridge = localSessionBridge || null;
     this._sessionContextBySender = new Map();
     this._fileSystemPathAliases = Array.isArray(options && options.fileSystemPathAliases) &&
       options.fileSystemPathAliases.length > 0
@@ -363,20 +364,27 @@ class AsarAdapter {
     }
 
     const normalizedChannel = String(channel).toLowerCase();
+
+    // Layer 1: sessionStore record normalization (status fields, session structure)
+    let normalized = result;
     if (normalizedChannel.includes('gettranscript')) {
-      return filterTranscriptMessages(result);
-    }
-    if (normalizedChannel.includes('getsession')) {
-      return this._sessionStore && typeof this._sessionStore.normalizeSessionRecord === 'function'
+      normalized = filterTranscriptMessages(result);
+    } else if (normalizedChannel.includes('getsession')) {
+      normalized = this._sessionStore && typeof this._sessionStore.normalizeSessionRecord === 'function'
         ? this._sessionStore.normalizeSessionRecord(result)
         : result;
-    }
-    if (normalizedChannel.includes('getall') && Array.isArray(result)) {
-      return this._sessionStore && typeof this._sessionStore.normalizeSessionRecord === 'function'
+    } else if (normalizedChannel.includes('getall') && Array.isArray(result)) {
+      normalized = this._sessionStore && typeof this._sessionStore.normalizeSessionRecord === 'function'
         ? result.map((entry) => this._sessionStore.normalizeSessionRecord(entry))
         : result;
     }
-    return result;
+
+    // Layer 2: bridge normalization (SDK message conversion, coworkCompatibilityState)
+    if (this._localSessionBridge && typeof this._localSessionBridge.normalizeLocalSessionIpcResult === 'function') {
+      normalized = this._localSessionBridge.normalizeLocalSessionIpcResult(channel, normalized);
+    }
+
+    return normalized;
   }
 
   rewriteIpcArgs(channel, args) {

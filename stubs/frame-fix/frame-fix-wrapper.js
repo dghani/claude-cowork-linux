@@ -15,6 +15,7 @@ const { createSessionOrchestrator } = require('./cowork/session_orchestrator.js'
 const { createSessionStore } = require('./cowork/session_store.js');
 const { createIpcTap } = require('./cowork/ipc_tap.js');
 const { createOverrideRegistry, matchOverride, extractEipcUuid, proactivelyRegisterOverrides, isProactiveChannel } = require('./cowork/ipc_overrides.js');
+const { createLocalSessionBridge } = require('./cowork/local_session_bridge.js');
 
 console.log('[Frame Fix] Wrapper v2.5 loaded');
 if (process.env.CLAUDE_DEVTOOLS === '1') console.log('[Frame Fix] DevTools mode enabled');
@@ -270,12 +271,14 @@ function installLinuxMenuInterceptors(electronModule) {
 
   if (app && typeof app.setApplicationMenu !== 'function') {
     app.setApplicationMenu = function(menu) {
+      global.__coworkApplicationMenu = menu;
       hideLinuxMenuBars(electronModule);
       return undefined;
     };
   }
 
   menuApi.setApplicationMenu = function(menu) {
+    global.__coworkApplicationMenu = menu;
     hideLinuxMenuBars(electronModule);
     return undefined;
   };
@@ -343,9 +346,15 @@ const ipcSessionOrchestrator = createSessionOrchestrator({
   dirs: DIRS,
   sessionStore: localSessionStore,
 });
+const localSessionBridge = createLocalSessionBridge({
+  claudeLocalAgentConfigRoot: DIRS.claudeLocalAgentRoot,
+  xdgDataHome: DIRS.xdgDataHome,
+  appSupportRoot: DIRS.legacyClaudeAppSupportRoot,
+});
 const asarAdapter = createAsarAdapter({
   sessionOrchestrator: ipcSessionOrchestrator,
   sessionStore: localSessionStore,
+  localSessionBridge,
 });
 global.__coworkAsarAdapter = asarAdapter;
 global.__coworkSessionStore = localSessionStore;
@@ -822,12 +831,16 @@ Module.prototype.require = function(id) {
       _sendPatched.add(contents);
       const originalSend = contents.send.bind(contents);
       contents.send = function(channel, ...args) {
-        const ignoredType = getIgnoredLiveMessageType(channel, args[0]);
-        if (ignoredType) {
-          logIgnoredLiveMessage(channel, args[0], ignoredType);
+        const normalized = localSessionBridge.normalizeLiveSessionPayloads(channel, args[0]);
+        if (normalized.length === 0) {
+          logIgnoredLiveMessage(channel, args[0], 'filtered');
           return false;
         }
-        return originalSend(channel, ...args);
+        let result;
+        for (const payload of normalized) {
+          result = originalSend(channel, payload, ...args.slice(1));
+        }
+        return result;
       };
     }
 
