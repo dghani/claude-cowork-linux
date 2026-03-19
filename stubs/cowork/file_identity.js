@@ -131,11 +131,9 @@ function fingerprintsLikelyMatch(left, right) {
 
 module.exports = {
   computeFileContentHash,
-  fingerprintFromStat,
   hasStrongFingerprintMatch,
   fingerprintsLikelyMatch,
   getFingerprintMatchConfidence,
   normalizeAbsolutePath,
   readFileFingerprint,
-  areEquivalentMtimeMs,
 };

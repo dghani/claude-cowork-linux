@@ -187,9 +187,7 @@ function createFileWatchManager(options) {
 }
 
 module.exports = {
-  FileWatchManager,
   createFileWatchManager,
   isPathWithinRoots,
   normalizeAuthorizedRoots,
-  readWatchStateFile,
 };

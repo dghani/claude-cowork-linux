@@ -552,18 +552,13 @@ function createAsarAdapter(options) {
 }
 
 module.exports = {
-  AsarAdapter,
   createAsarAdapter,
   DEFAULT_FILESYSTEM_PATH_ALIASES,
   describeFileSystemRelinkIpcSurface,
   filterTranscriptMessages,
   getFileSystemRequestContext,
-  isLocalSessionActivationChannel,
   isFileSystemPathRewriteChannel,
-  isSessionScopedFileSystemPathChannel,
   isLocalSessionMutationChannel,
   isLocalSessionResultChannel,
-  joinIpcArgs,
-  splitIpcArgs,
   rewriteAliasedFilePath,
 };

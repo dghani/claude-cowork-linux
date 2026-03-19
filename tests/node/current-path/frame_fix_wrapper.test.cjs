@@ -89,7 +89,7 @@ test('installLinuxMenuInterceptors tolerates missing app.setApplicationMenu and 
   assert.doesNotThrow(() => {
     electronModule.Menu.setDefaultApplicationMenu();
   });
-  assert.deepEqual(electronModule.Menu.calls, [null]);
+  assert.deepEqual(electronModule.Menu.calls, []);
   assert.deepEqual(fakeWindow.hiddenStates, [false]);
 });
 
@@ -130,7 +130,7 @@ test('installLinuxMenuInterceptors accepts function-valued electron.Menu with st
   assert.doesNotThrow(() => {
     electronModule.Menu.setDefaultApplicationMenu();
   });
-  assert.deepEqual(Menu.calls, [null]);
+  assert.deepEqual(Menu.calls, []);
   assert.deepEqual(fakeWindow.hiddenStates, [false]);
 });
 
@@ -172,7 +172,7 @@ test('installLinuxMenuInterceptors retries after an early electron shape without
   assert.doesNotThrow(() => {
     lateElectronModule.Menu.setDefaultApplicationMenu();
   });
-  assert.deepEqual(lateElectronModule.Menu.calls, [null]);
+  assert.deepEqual(lateElectronModule.Menu.calls, []);
   assert.deepEqual(fakeWindow.hiddenStates, [false]);
 });
 

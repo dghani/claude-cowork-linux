@@ -423,19 +423,6 @@ function chooseSessionTranscriptCandidate(options) {
 }
 
 module.exports = {
-  TranscriptStore: {
-    buildTranscriptContinuityPlan,
-    chooseBestTranscriptCandidate,
-    chooseSessionTranscriptCandidate,
-    inspectTranscriptFile,
-    inspectTranscriptText,
-    isConversationBearingMessage,
-    listConversationEntriesFromTranscriptFile,
-    listConversationEntriesFromTranscriptText,
-    listTranscriptCandidatesForSession,
-    parseTranscriptLine,
-    sanitizeTranscriptProjectKey,
-  },
   buildTranscriptContinuityPlan,
   chooseBestTranscriptCandidate,
   chooseSessionTranscriptCandidate,

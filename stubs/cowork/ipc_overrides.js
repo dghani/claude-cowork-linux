@@ -57,20 +57,26 @@ function readLocalFileContent(filePath) {
   return { content: buf.toString('utf-8'), mimeType: mime, fileName, encoding: 'utf-8' };
 }
 
-function isTerminalApp(desktopFile) {
-  if (!desktopFile) return false;
-  const dirs = [
-    '/usr/share/applications',
-    '/usr/local/share/applications',
-    path.join(require('os').homedir(), '.local', 'share', 'applications'),
-  ];
-  for (const dir of dirs) {
+const XDG_APP_DIRS = [
+  '/usr/share/applications',
+  '/usr/local/share/applications',
+  path.join(require('os').homedir(), '.local', 'share', 'applications'),
+];
+
+function readDesktopFile(desktopFile) {
+  if (!desktopFile) return null;
+  for (const dir of XDG_APP_DIRS) {
     try {
-      const content = fs.readFileSync(path.join(dir, desktopFile), 'utf-8');
-      return /^Terminal\s*=\s*true/m.test(content);
+      return fs.readFileSync(path.join(dir, desktopFile), 'utf-8');
     } catch (_) {}
   }
-  return false;
+  return null;
+}
+
+function isTerminalApp(desktopFile) {
+  const content = readDesktopFile(desktopFile);
+  if (!content) return false;
+  return /^Terminal\s*=\s*true/m.test(content);
 }
 
 function getDesktopFileForMime(mime) {
@@ -84,21 +90,12 @@ function getDesktopFileForMime(mime) {
 }
 
 function getExecFromDesktop(desktopFile) {
-  if (!desktopFile) return null;
-  const dirs = [
-    '/usr/share/applications',
-    '/usr/local/share/applications',
-    path.join(require('os').homedir(), '.local', 'share', 'applications'),
-  ];
-  for (const dir of dirs) {
-    try {
-      const content = fs.readFileSync(path.join(dir, desktopFile), 'utf-8');
-      const match = content.match(/^Exec\s*=\s*(\S+)/m);
-      return match ? match[1] : null;
-    } catch (_) {}
-  }
-  return null;
+  const content = readDesktopFile(desktopFile);
+  if (!content) return null;
+  const match = content.match(/^Exec\s*=\s*(\S+)/m);
+  return match ? match[1] : null;
 }
+
 
 // Terminal emulator resolution — cached after first successful lookup.
 // Checks: $TERMINAL env, xdg-terminal-exec, then common emulators.
@@ -204,9 +201,9 @@ function createOverrideRegistry(getProcessState) {
     'ComputerUseTcc_$_getCurrentSessionGrants': async () => ([]),
     'ComputerUseTcc_$_revokeGrant': async () => {},
 
-    // ClaudeVM — report VM as running and ready
-    'ClaudeVM_$_getRunningStatus': async () => ({ ...CLAUDE_VM_RUNNING_STATUS }),
-    'ClaudeVM_$_getDownloadStatus': async () => ({ ...CLAUDE_VM_DOWNLOAD_STATUS }),
+    // ClaudeVM — report VM as running and ready (webapp expects string "ready")
+    'ClaudeVM_$_getRunningStatus': async () => CLAUDE_VM_RUNNING_STATUS,
+    'ClaudeVM_$_getDownloadStatus': async () => CLAUDE_VM_DOWNLOAD_STATUS,
     'ClaudeVM_$_isSupported': async () => 'supported',
     'ClaudeVM_$_getSupportStatus': async () => 'supported',
     'ClaudeVM_$_checkVirtualMachinePlatform': async () => ({ supported: true }),
@@ -381,5 +378,4 @@ module.exports = {
   getMimeType,
   isBinaryMime,
   readLocalFileContent,
-  whichApplicationForFile,
 };

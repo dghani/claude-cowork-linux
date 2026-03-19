@@ -23,13 +23,9 @@ const CLAUDE_CODE_STATUS = Object.freeze({
 
 const CLAUDE_CODE_PREPARE = Object.freeze({ ready: true, success: true });
 
-const CLAUDE_VM_RUNNING_STATUS = Object.freeze({
-  running: true, connected: true, ready: true, status: 'running',
-});
+const CLAUDE_VM_RUNNING_STATUS = 'ready';
 
-const CLAUDE_VM_DOWNLOAD_STATUS = Object.freeze({
-  status: 'ready', downloaded: true, installed: true, progress: 100,
-});
+const CLAUDE_VM_DOWNLOAD_STATUS = 'ready';
 
 // getSyntheticIPCResponse uses denial stubs (fires early, before asar init)
 const COMPUTER_USE_TCC_DENIED = Object.freeze({

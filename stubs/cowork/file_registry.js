@@ -793,14 +793,6 @@ function createFileRegistry(options) {
 }
 
 module.exports = {
-  FileRegistry,
-  appendHistoryEntry,
   createFileRegistry,
   createFileResolutionResult,
-  createFileId,
-  getKnownPaths,
-  normalizeRegistryEntry,
-  normalizeProvenance,
-  parseRegistryLines,
-  readRegistryFile,
 };

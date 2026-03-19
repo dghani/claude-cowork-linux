@@ -68,110 +68,6 @@ function canonicalizeResolvableHostPath(hostPath) {
 }
 
 // ============================================================
-// IPC Handler Registration
-// These handlers are what the app expects to exist
-// ============================================================
-
-function safeHandle(channel, handler) {
-  try {
-    // Check if handler already exists
-    // ipcMain doesn't expose a direct check, so we track our own
-    ipcMain.handle(channel, handler);
-    log(`  Registered: ${channel}`);
-    return true;
-  } catch (e) {
-    if (e.message && e.message.includes('already registered')) {
-      log(`  Skipped (exists): ${channel}`);
-      return false;
-    }
-    log(`  Error registering ${channel}:`, e.message);
-    return false;
-  }
-}
-
-function registerCriticalHandlers() {
-  log('Registering critical IPC handlers...');
-
-  // Local Agent Mode Sessions
-  safeHandle('LocalAgentModeSessions_$_getAll', async () => {
-    trace('IPC', 'LocalAgentModeSessions_$_getAll called');
-    return []; // Return empty sessions list
-  });
-
-  // Claude Code
-  safeHandle('ClaudeCode_$_prepare', async () => {
-    trace('IPC', 'ClaudeCode_$_prepare called');
-    return { ready: false, reason: 'linux-stub' };
-  });
-
-  // Claude VM handlers
-  const vmHandlers = {
-    'ClaudeVM_$_download': async () => ({ status: 'unavailable', reason: 'linux-stub' }),
-    'ClaudeVM_$_getDownloadStatus': async () => ({ status: 'unavailable' }),
-    'ClaudeVM_$_getRunningStatus': async () => ({ running: false }),
-    'ClaudeVM_$_start': async () => ({ started: false, reason: 'linux-stub' }),
-  };
-
-  for (const [channel, handler] of Object.entries(vmHandlers)) {
-    safeHandle(channel, handler);
-  }
-
-  // Window Control
-  safeHandle('WindowControl_$_setThemeMode', async (event, mode) => {
-    trace('IPC', 'WindowControl_$_setThemeMode called', { mode });
-    // Could integrate with system theme here
-    return { success: true };
-  });
-
-  // Quick Entry
-  safeHandle('QuickEntry_$_setRecentChats', async (event, chats) => {
-    trace('IPC', 'QuickEntry_$_setRecentChats called', { count: chats?.length });
-    return { success: true };
-  });
-
-  // Account
-  safeHandle('Account_$_setAccountDetails', async (event, details) => {
-    trace('IPC', 'Account_$_setAccountDetails called');
-    return { success: true };
-  });
-
-  // Desktop Internationalization
-  safeHandle('DesktopIntl_$_getInitialLocale', async () => {
-    const locale = process.env.LANG?.split('.')[0] || 'en_US';
-    trace('IPC', 'DesktopIntl_$_getInitialLocale called', { locale });
-    return locale;
-  });
-
-  safeHandle('DesktopIntl_$_requestLocaleChange', async (event, locale) => {
-    trace('IPC', 'DesktopIntl_$_requestLocaleChange called', { locale });
-    return { success: true };
-  });
-
-  // Computer Use TCC (macOS permissions gate) — unsupported on Linux, return
-  // a stable denied state instead of surfacing missing-handler errors.
-  safeHandle('ComputerUseTcc_$_getState', async () => {
-    trace('IPC', 'ComputerUseTcc_$_getState called');
-    return {
-      accessibility: 'denied',
-      screenCapture: 'denied',
-      canPrompt: false,
-    };
-  });
-
-  safeHandle('ComputerUseTcc_$_requestAccess', async () => {
-    trace('IPC', 'ComputerUseTcc_$_requestAccess called');
-    return {
-      success: false,
-      accessibility: 'denied',
-      screenCapture: 'denied',
-      canPrompt: false,
-    };
-  });
-
-  log('Critical IPC handlers registered.');
-}
-
-// ============================================================
 // Keyboard constants (used by the app)
 // ============================================================
 
@@ -386,7 +282,6 @@ function get_app_info_for_file(filePath) {
 // ============================================================
 
 // NOTE: IPC handlers are registered in ipc-handler-setup.js (baked into app.asar)
-// registerCriticalHandlers() is no longer called here
 
 log('claude-native stub loaded successfully');
 

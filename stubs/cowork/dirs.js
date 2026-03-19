@@ -237,8 +237,6 @@ module.exports = {
   canonicalizePathForHostAccess,
   canonicalizeVmPathStrict,
   createDirs,
-  getCoworkSessionDataDir,
-  getCoworkSessionStateDir,
   getSessionFileRegistryPath,
   getSessionWatchStatePath,
   isPathSafe,

@@ -22,6 +22,11 @@ const {
 const {
   buildTranscriptContinuityPlan,
 } = require('./transcript_store.js');
+const {
+  extractCliSessionId,
+  isFlatlineResumeResult,
+  isSuccessfulResult,
+} = require('./stream_protocol.js');
 
 // ============================================================================
 // MOUNT MANAGER
@@ -590,6 +595,10 @@ class SessionOrchestrator {
     }
 
     // Step 11: Check for resume arguments and session metadata
+    // Only strip --resume when we have positive evidence the transcript is
+    // unresumable (e.g. corrupt/empty file on disk). If no local transcript
+    // exists at all, trust the asar's --resume — the CLI may store session
+    // state server-side or in a location we don't scan.
     const resumeArgIndex = findResumeArgIndex(hostArgs);
     const currentResumeCliSessionId = resumeArgIndex === -1 ? null : hostArgs[resumeArgIndex + 1];
     const sessionDirectory = deriveSessionDirectory(hostConfigDir);
@@ -603,9 +612,9 @@ class SessionOrchestrator {
         sessionDirectory,
       });
 
-      if (!resumePlan.shouldResume) {
+      if (!resumePlan.shouldResume && resumePlan.reason === 'transcript_not_resumable') {
         hostArgs = removeResumeArgs(hostArgs, trace);
-      } else if (resumePlan.resumeCliSessionId) {
+      } else if (resumePlan.shouldResume && resumePlan.resumeCliSessionId) {
         hostArgs = replaceResumeArgs(hostArgs, resumePlan.resumeCliSessionId, trace);
       }
     }
@@ -1024,55 +1033,22 @@ class SessionOrchestrator {
       return { action: 'ignore' };
     }
 
-    const sessionId = this._extractSessionId(parsedLine);
+    const sessionId = extractCliSessionId(parsedLine);
     if (sessionId) {
       return { action: 'extract_session_id', sessionId };
     }
 
-    if (this._isFlatlineResult(parsedLine)) {
+    if (isFlatlineResumeResult(parsedLine)) {
       return { action: 'flatline_detected' };
     }
 
-    if (this._isSuccessResult(parsedLine)) {
+    if (isSuccessfulResult(parsedLine)) {
       return { action: 'success' };
     }
 
     return { action: 'forward' };
   }
 
-  _extractSessionId(parsedLine) {
-    const candidates = [
-      parsedLine.session_id,
-      parsedLine.sessionId,
-      parsedLine.cliSessionId,
-    ];
-    for (const candidate of candidates) {
-      if (typeof candidate === 'string' && candidate.trim()) {
-        return candidate;
-      }
-    }
-    if (parsedLine.event && typeof parsedLine.event === 'object') {
-      const eventCandidates = [parsedLine.event.session_id, parsedLine.event.sessionId];
-      for (const candidate of eventCandidates) {
-        if (typeof candidate === 'string' && candidate.trim()) {
-          return candidate;
-        }
-      }
-    }
-    return null;
-  }
-
-  _isFlatlineResult(parsedLine) {
-    return parsedLine.type === 'result' &&
-      parsedLine.is_error === true &&
-      Number(parsedLine.num_turns || 0) === 0;
-  }
-
-  _isSuccessResult(parsedLine) {
-    return parsedLine.type === 'result' &&
-      parsedLine.is_error !== true &&
-      (parsedLine.subtype === 'success' || Number(parsedLine.num_turns || 0) > 0);
-  }
 
   buildRetryInput(processState) {
     if (!processState || typeof processState !== 'object') {

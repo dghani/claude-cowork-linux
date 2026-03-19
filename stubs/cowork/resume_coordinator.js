@@ -138,14 +138,6 @@ function handleFlatlineResumeFailure(options) {
 }
 
 module.exports = {
-  ResumeCoordinator: {
-    handleFlatlineResumeFailure,
-    getPreferredProjectKey,
-    getPreferredSessionRoot,
-    handleResumeFailure,
-    isRemoteConversationMissingError,
-    planSessionResume,
-  },
   handleFlatlineResumeFailure,
   getPreferredProjectKey,
   getPreferredSessionRoot,

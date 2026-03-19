@@ -1,23 +1,20 @@
 #!/usr/bin/env node
-// Fetch latest Claude Desktop DMG URL from Anthropic's API.
-// Replaces fetch-dmg.py + rnet dependency with zero external deps.
+// Fetch latest Claude Desktop download URL via Homebrew cask metadata.
+// The old claude.ai/api/desktop endpoint is now behind Cloudflare challenges;
+// the Homebrew cask API tracks the same releases without browser requirements.
 
 'use strict';
 
 const https = require('https');
+const path = require('path');
 
-const API_URL = 'https://claude.ai/api/desktop/darwin/universal/dmg/latest';
-const USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+const CASK_API = 'https://formulae.brew.sh/api/cask/claude.json';
 
 function fetch(url) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, {
-      headers: {
-        'User-Agent': USER_AGENT,
-        'Accept': 'application/json',
-      },
+      headers: { 'Accept': 'application/json' },
     }, (res) => {
-      // Follow redirects
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         return resolve(fetch(res.headers.location));
       }
@@ -36,27 +33,33 @@ function fetch(url) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const text = await fetch(API_URL);
+  const text = await fetch(CASK_API);
 
-  let data;
+  let cask;
   try {
-    data = JSON.parse(text);
+    cask = JSON.parse(text);
   } catch {
-    process.stderr.write(`Failed to parse API response: ${text.slice(0, 200)}\n`);
+    process.stderr.write(`Failed to parse cask response: ${text.slice(0, 200)}\n`);
     process.exit(1);
   }
 
-  if (!data.url || !data.version) {
-    process.stderr.write(`Unexpected API response: ${JSON.stringify(data).slice(0, 200)}\n`);
+  if (!cask.url || !cask.version) {
+    process.stderr.write(`Unexpected cask response: ${JSON.stringify(cask).slice(0, 200)}\n`);
     process.exit(1);
   }
+
+  // Cask version format: "1.1.7464,commithash" — extract the numeric part
+  const version = cask.version.split(',')[0];
+  const url = cask.url;
+  const sha256 = cask.sha256 || null;
+  const filename = path.basename(new URL(url).pathname);
 
   if (args.includes('--url')) {
-    process.stdout.write(data.url + '\n');
+    process.stdout.write(url + '\n');
   } else if (args.includes('--json')) {
-    process.stdout.write(JSON.stringify(data) + '\n');
+    process.stdout.write(JSON.stringify({ version, url, sha256, filename }) + '\n');
   } else {
-    process.stdout.write(`${data.version} ${data.url}\n`);
+    process.stdout.write(`${version} ${url}\n`);
   }
 }
 

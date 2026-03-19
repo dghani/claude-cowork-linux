@@ -143,9 +143,6 @@ function redactCredentials(text) {
 }
 
 module.exports = {
-  HIGH_ENTROPY_THRESHOLD,
-  MIN_SECRET_LENGTH,
-  TOKEN_PREFIXES,
   classifyEnvEntry,
   isLikelyCredentialKey,
   isLikelyCredentialValue,

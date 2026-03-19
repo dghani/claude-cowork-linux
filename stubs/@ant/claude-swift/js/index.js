@@ -48,6 +48,14 @@ const { createSessionStore } = require('../../../../cowork/session_store.js');
 const { createSessionsApi } = require('../../../../cowork/sessions_api.js');
 const { createSessionOrchestrator } = require('../../../../cowork/session_orchestrator.js');
 const { redactCredentials } = require('../../../../cowork/credential_classifier.js');
+const {
+  extractCliSessionId,
+  getIgnoredSdkMessageType,
+  hasAssistantResponse,
+  isFlatlineResumeResult,
+  isSuccessfulResult,
+  parseJsonLine,
+} = require('../../../../cowork/stream_protocol.js');
 
 const DIRS = global.__coworkDirs || createDirs();
 const CLAUDE_CONFIG_ROOT = DIRS.claudeConfigRoot;
@@ -151,122 +159,6 @@ function extractSessionNameFromVmPathStrict(vmPath) {
   return parts[0];
 }
 
-function getIgnoredSdkMessageType(line) {
-  if (typeof line !== 'string') {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(line);
-    if (!parsed || typeof parsed !== 'object') {
-      return null;
-    }
-    if (parsed.type === 'queue-operation' || parsed.type === 'rate_limit_event') {
-      return parsed.type;
-    }
-    if (parsed.type === 'message' && parsed.message && typeof parsed.message === 'object') {
-      const nestedType = parsed.message.type;
-      if (nestedType === 'queue-operation' || nestedType === 'rate_limit_event') {
-        return nestedType;
-      }
-    }
-  } catch (_) {}
-  return null;
-}
-
-function parseJsonLine(line) {
-  if (typeof line !== 'string') {
-    return null;
-  }
-  try {
-    return JSON.parse(line);
-  } catch (_) {
-    return null;
-  }
-}
-
-function hasAssistantResponse(parsedLine) {
-  if (!parsedLine || typeof parsedLine !== 'object') {
-    return false;
-  }
-  if (parsedLine.type === 'stream_event') {
-    return true;
-  }
-  if (parsedLine.type === 'result' && Number(parsedLine.num_turns || 0) > 0) {
-    return true;
-  }
-  if (parsedLine.type === 'assistant') {
-    return true;
-  }
-  if (parsedLine.type === 'message' && parsedLine.message && typeof parsedLine.message === 'object') {
-    if (parsedLine.message.role === 'assistant' || parsedLine.message.type === 'assistant') {
-      return true;
-    }
-  }
-  return false;
-}
-
-function isFlatlineResumeResult(parsedLine) {
-  if (!parsedLine || typeof parsedLine !== 'object') {
-    return false;
-  }
-  return parsedLine.type === 'result' &&
-    parsedLine.is_error === true &&
-    Number(parsedLine.num_turns || 0) === 0;
-}
-
-function isSuccessfulResult(parsedLine) {
-  if (!parsedLine || typeof parsedLine !== 'object') {
-    return false;
-  }
-  return parsedLine.type === 'result' &&
-    parsedLine.is_error !== true &&
-    (parsedLine.subtype === 'success' || Number(parsedLine.num_turns || 0) > 0);
-}
-
-function extractCliSessionId(parsedLine) {
-  if (!parsedLine || typeof parsedLine !== 'object') {
-    return null;
-  }
-
-  const directCandidates = [
-    parsedLine.session_id,
-    parsedLine.sessionId,
-    parsedLine.cliSessionId,
-  ];
-  for (const candidate of directCandidates) {
-    if (typeof candidate === 'string' && candidate.trim()) {
-      return candidate;
-    }
-  }
-
-  if (parsedLine.event && typeof parsedLine.event === 'object') {
-    const eventCandidates = [
-      parsedLine.event.session_id,
-      parsedLine.event.sessionId,
-      parsedLine.event.cliSessionId,
-    ];
-    for (const candidate of eventCandidates) {
-      if (typeof candidate === 'string' && candidate.trim()) {
-        return candidate;
-      }
-    }
-  }
-
-  if (parsedLine.message && typeof parsedLine.message === 'object') {
-    const messageCandidates = [
-      parsedLine.message.session_id,
-      parsedLine.message.sessionId,
-      parsedLine.message.cliSessionId,
-    ];
-    for (const candidate of messageCandidates) {
-      if (typeof candidate === 'string' && candidate.trim()) {
-        return candidate;
-      }
-    }
-  }
-
-  return null;
-}
 
 function generateUUID() {
   if (typeof crypto.randomUUID === 'function') {
@@ -1715,6 +1607,12 @@ class SwiftAddonStub extends EventEmitter {
     let stdoutBuffer = '';
     let stderrBuffer = '';
 
+    if (proc.stdin) {
+      proc.stdin.on('error', (err) => {
+        if (err.code !== 'EPIPE') trace('stdin error for process ' + processState.id + ': ' + err.message);
+      });
+    }
+
     if (proc.stdout) {
       proc.stdout.on('data', function(data) {
         stdoutBuffer += data.toString();
@@ -1832,6 +1730,11 @@ class SwiftAddonStub extends EventEmitter {
       processState.hadFirstResponse ||
       signal
     ) {
+      trace('Flatline retry skipped for ' + processState.id + ': ' +
+        (!processState.attemptedResume ? 'not a resume' :
+         processState.retryCount > 0 ? 'already retried' :
+         processState.hadFirstResponse ? 'had response' :
+         'killed by signal ' + signal));
       return false;
     }
 
@@ -1933,10 +1836,14 @@ class SwiftAddonStub extends EventEmitter {
       processState.stdinHistory.push(data);
     }
     const proc = this._processes.get(id);
-    if (proc && proc.stdin) {
-      // Raw passthrough - /sessions symlink now points to active SESSIONS_BASE,
-      // so paths resolve correctly without translation
-      proc.stdin.write(data);
+    if (proc && proc.stdin && proc.exitCode === null) {
+      trace('Sending ' + Buffer.byteLength(data) + ' bytes to stdin of process ' + id);
+      proc.stdin.write(data, (err) => {
+        if (err) trace('stdin write error for process ' + id + ': ' + err.message);
+      });
+    } else {
+      trace('stdin write dropped for process ' + id + ': ' +
+        (!proc ? 'no process' : proc.exitCode !== null ? 'exited with code ' + proc.exitCode : 'no stdin'));
     }
   }
 

@@ -371,12 +371,9 @@ function createProcessManager(deps) {
 
 module.exports = {
   DEFAULT_STDIO,
+  ProcessManager,
+  createProcessManager,
   deriveSessionDirectory,
   deriveSessionMetadataPath,
-  EnvironmentBuilder,
-  getPreferredWorkspaceFromSessionMetadata,
-  ProcessManager,
-  readPreferredWorkspaceFromConfigDir,
   resolveHostCwdPath,
-  createProcessManager,
 };

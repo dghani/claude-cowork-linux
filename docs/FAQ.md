@@ -330,6 +330,48 @@ CLAUDE_COWORK_TRACE_IO=1 ./launch.sh 2>&1 | tee ~/cowork-verbose.log
 </details>
 
 <details>
+<summary><strong>DevTools and webapp asset inspection</strong></summary>
+
+Launch with `--devtools` to open Chromium DevTools and automatically dump all
+webapp JS/CSS/JSON assets to disk:
+
+```bash
+./launch.sh --devtools
+```
+
+Assets are saved to `~/.local/state/claude-cowork/logs/webapp-assets/`.
+The previous dump is rotated to `webapp-assets.bak/` on each launch.
+
+**Useful commands after an asar or webapp update:**
+
+```bash
+# Compare current vs previous webapp assets to spot protocol changes
+diff -rq ~/.local/state/claude-cowork/logs/webapp-assets/ \
+         ~/.local/state/claude-cowork/logs/webapp-assets.bak/
+
+# Search dumped assets for IPC handler names
+rg "LocalAgentModeSessions" ~/.local/state/claude-cowork/logs/webapp-assets/
+
+# Check which IPC handlers the asar registers
+rg "LocalAgentModeSessions_\\\$_" ~/.local/state/claude-cowork/logs/webapp-assets/
+
+# Verify transcript path chain
+grep "Translated envVar CLAUDE_CONFIG_DIR" \
+  ~/.local/state/claude-cowork/logs/claude-swift-trace.log
+
+# Check if sessions.json has conversation IDs
+python3 -c "
+import json, os
+p = os.path.expanduser('~/.config/Claude/LocalAgentModeSessions/sessions.json')
+d = json.load(open(p))
+for s in d.get('sessions', []):
+    print(s.get('sessionId','?'), s.get('ccConversationId','MISSING'))
+"
+```
+
+</details>
+
+<details>
 <summary><strong>Trace log format</strong></summary>
 
 The stub writes to `~/.local/state/claude-cowork/logs/claude-swift-trace.log`:

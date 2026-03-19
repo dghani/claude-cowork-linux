@@ -17,6 +17,54 @@ const { createIpcTap } = require('./cowork/ipc_tap.js');
 const { createOverrideRegistry, matchOverride, extractEipcUuid, proactivelyRegisterOverrides, isProactiveChannel } = require('./cowork/ipc_overrides.js');
 
 console.log('[Frame Fix] Wrapper v2.5 loaded');
+if (process.env.CLAUDE_DEVTOOLS === '1') console.log('[Frame Fix] DevTools mode enabled');
+
+// ── Asset Dumper (--devtools only) ──────────────────────────────────────
+// Saves JS/CSS/JSON from claude.ai and *.anthropic.com to:
+//   ~/.local/state/claude-cowork/logs/webapp-assets/
+// Previous dump is rotated to webapp-assets.bak/ on each launch.
+function setupAssetDumper(win) {
+  const logDir = process.env.CLAUDE_LOG_DIR || path.join(os.homedir(), '.local', 'state', 'claude-cowork', 'logs');
+  const dumpDir = path.join(logDir, 'webapp-assets');
+  const bakDir = dumpDir + '.bak';
+
+  // Rotate: remove old .bak, rename current to .bak
+  try { fs.rmSync(bakDir, { recursive: true, force: true }); } catch (_) {}
+  try { fs.renameSync(dumpDir, bakDir); } catch (_) {}
+  try { fs.mkdirSync(dumpDir, { recursive: true }); } catch (_) {}
+
+  const dumped = new Set();
+  let dumpCount = 0;
+  win.webContents.session.webRequest.onCompleted(
+    { urls: ['*://*.anthropic.com/*', '*://claude.ai/*'] },
+    (details) => {
+      if (details.statusCode !== 200) return;
+      const url = details.url;
+      if (dumped.has(url)) return;
+      const ext = path.extname(new URL(url).pathname).toLowerCase();
+      if (!['.js', '.css', '.json', '.html'].includes(ext)) return;
+      dumped.add(url);
+      win.webContents.session.fetch(url).then(r => r.text()).then(body => {
+        const safeName = new URL(url).pathname.replace(/\//g, '_').replace(/^_/, '');
+        fs.writeFile(path.join(dumpDir, safeName), body, () => {
+          dumpCount++;
+          if (dumpCount <= 5 || dumpCount % 10 === 0) {
+            console.log('[Asset Dump] ' + dumpCount + ' files -> ' + dumpDir);
+          }
+        });
+      }).catch(() => {});
+    }
+  );
+
+  console.log('');
+  console.log('╔══════════════════════════════════════════════════════════════╗');
+  console.log('║  DEVTOOLS MODE  —  Asset dumper active                      ║');
+  console.log('║  Current: ' + dumpDir.padEnd(49) + '║');
+  console.log('║  Backup:  ' + bakDir.padEnd(49) + '║');
+  console.log('║  Diff with: diff <dir> <dir.bak> to spot protocol changes   ║');
+  console.log('╚══════════════════════════════════════════════════════════════╝');
+  console.log('');
+}
 
 function wrapAliasedFileSystemHandler(channel, handler, getAdapter) {
   if (typeof handler !== 'function' || !isFileSystemPathRewriteChannel(channel)) {
@@ -158,7 +206,6 @@ function hideLinuxMenuBars(electronModule) {
         win.setMenuBarVisibility(false);
       }
     }
-    console.log('[Frame Fix] Menu bar hidden on all windows');
   } catch (error) {
     console.log('[Frame Fix] setMenuBarVisibility error:', error.message);
   }
@@ -223,52 +270,23 @@ function installLinuxMenuInterceptors(electronModule) {
 
   if (app && typeof app.setApplicationMenu !== 'function') {
     app.setApplicationMenu = function(menu) {
-      try {
-        if (originalSetAppMenu) {
-          return originalSetAppMenu(menu);
-        }
-      } catch (error) {
-        console.log('[Frame Fix] app.setApplicationMenu fallback error (ignored):', error.message);
-      } finally {
-        hideLinuxMenuBars(electronModule);
-      }
+      hideLinuxMenuBars(electronModule);
       return undefined;
     };
-    console.log('[Frame Fix] Added app.setApplicationMenu fallback');
   }
 
   menuApi.setApplicationMenu = function(menu) {
-    console.log('[Frame Fix] Intercepting setApplicationMenu');
-    try {
-      if (originalSetAppMenu) {
-        return originalSetAppMenu(menu);
-      }
-    } catch (error) {
-      console.log('[Frame Fix] setApplicationMenu error (ignored):', error.message);
-    } finally {
-      hideLinuxMenuBars(electronModule);
-    }
+    hideLinuxMenuBars(electronModule);
     return undefined;
   };
 
   if (originalSetDefaultAppMenu) {
     menuApi.setDefaultApplicationMenu = function(...args) {
-      console.log('[Frame Fix] Intercepting setDefaultApplicationMenu');
       if (REAL_PLATFORM === 'linux') {
-        try {
-          menuApi.setApplicationMenu(null);
-        } catch (error) {
-          console.log('[Frame Fix] setDefaultApplicationMenu fallback error (ignored):', error.message);
-        }
+        hideLinuxMenuBars(electronModule);
         return undefined;
       }
-
-      try {
-        return originalSetDefaultAppMenu(...args);
-      } catch (error) {
-        console.log('[Frame Fix] setDefaultApplicationMenu error (ignored):', error.message);
-        return undefined;
-      }
+      return originalSetDefaultAppMenu(...args);
     };
   }
 }
@@ -371,6 +389,25 @@ try {
   console.log('[TMPDIR] Fixed: ' + vmTmpDir);
   console.log('[TMPDIR] os.tmpdir() patched');
   console.log('[VM_BUNDLE] Ready: ' + claudeVmBundle);
+
+  // The asar wraps all git commands with a "disclaimer" binary on macOS
+  // (Helpers/disclaimer git <args>). Since we spoof process.platform to
+  // "darwin", this codepath activates on Linux too. The binary doesn't
+  // exist in the Linux Electron distribution, causing ENOENT on every
+  // git operation (diff, status, etc). Create a transparent passthrough
+  // so the wrapper is a no-op — identical to what the asar's own
+  // non-darwin branch does (returns the command unchanged).
+  const disclaimerDir = path.join(path.dirname(process.resourcesPath), 'Helpers');
+  const disclaimerBin = path.join(disclaimerDir, 'disclaimer');
+  if (!fs.existsSync(disclaimerBin)) {
+    try {
+      fs.mkdirSync(disclaimerDir, { recursive: true, mode: 0o755 });
+      fs.writeFileSync(disclaimerBin, '#!/bin/sh\nexec "$@"\n', { mode: 0o755 });
+      console.log('[disclaimer] Created passthrough: ' + disclaimerBin);
+    } catch (de) {
+      console.warn('[disclaimer] Could not create passthrough: ' + de.message);
+    }
+  }
 } catch (e) {
   console.error('[TMPDIR] Setup failed:', e.message);
 }
@@ -384,7 +421,7 @@ const originalRenameSync = fs.renameSync;
 fs.rename = function(oldPath, newPath, callback) {
   originalRename(oldPath, newPath, (err) => {
     if (err && err.code === 'EXDEV') {
-      console.log('[fs.rename] EXDEV detected, using copy+delete for:', oldPath);
+      // Cross-filesystem rename — fall back to copy+delete
       const readStream = fs.createReadStream(oldPath);
       const writeStream = fs.createWriteStream(newPath);
       readStream.on('error', callback);
@@ -404,7 +441,7 @@ fs.renameSync = function(oldPath, newPath) {
     return originalRenameSync(oldPath, newPath);
   } catch (err) {
     if (err.code === 'EXDEV') {
-      console.log('[fs.renameSync] EXDEV detected, using copy+delete for:', oldPath);
+      // Cross-filesystem rename — fall back to copy+delete
       fs.copyFileSync(oldPath, newPath);
       fs.unlinkSync(oldPath);
       return;
@@ -412,8 +449,6 @@ fs.renameSync = function(oldPath, newPath) {
     throw err;
   }
 };
-
-console.log('[fs.rename] Patched to handle EXDEV errors');
 
 // ============================================================
 // 1. PLATFORM SPOOFING - Immediate, before any app code
@@ -803,6 +838,7 @@ Module.prototype.require = function(id) {
       patchEventDispatch(contents);
       if (ipcTap.enabled) ipcTap.wrapWebContents(contents);
 
+
       // Patch webContents.ipc.handle() to intercept handler registration.
       // When the asar calls contents.ipc.handle(channel, handler), we
       // check the channel suffix against our override registry and
@@ -833,6 +869,13 @@ Module.prototype.require = function(id) {
       patchWindowClose(win);
       if (win && win.webContents) {
         patchEventDispatch(win.webContents);
+        if (process.env.CLAUDE_DEVTOOLS === '1' && !global.__coworkDevToolsOpened) {
+          global.__coworkDevToolsOpened = true;
+          win.webContents.once('dom-ready', () => {
+            try { win.webContents.openDevTools({ mode: 'detach' }); } catch (_) {}
+          });
+          setupAssetDumper(win);
+        }
       }
     }, 'browser-window-created');
 

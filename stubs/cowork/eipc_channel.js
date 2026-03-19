@@ -96,8 +96,6 @@ const SAFE_DEFAULTS = {
 };
 
 module.exports = {
-  METHOD_SHAPES,
-  PLATFORM_ERROR_PATTERN,
   SAFE_DEFAULTS,
   classifyMethod,
   isPlatformError,
