@@ -241,33 +241,38 @@ test('installLinuxMenuInterceptors stores menu in global.__coworkApplicationMenu
   assert.equal(helpers.global.__coworkApplicationMenu, fakeMenu);
 });
 
-test('IGNORED_LIVE_MESSAGE_TYPES includes progress and last-prompt alongside queue-operation', () => {
-  // Validate the set contents by parsing the source directly — these types
-  // are defined in the module scope and can't be extracted by loadFrameFixHelpers.
-  const wrapperPath = path.join(__dirname, '..', '..', '..', 'stubs', 'frame-fix', 'frame-fix-wrapper.js');
-  const source = fs.readFileSync(wrapperPath, 'utf8');
-
-  // Extract the IGNORED_LIVE_MESSAGE_TYPES set definition
-  const match = source.match(/const IGNORED_LIVE_MESSAGE_TYPES = new Set\(\[([\s\S]*?)\]\)/);
-  assert.ok(match, 'IGNORED_LIVE_MESSAGE_TYPES set not found in source');
-
-  const setContents = match[1];
+test('LIVE_EVENT_IGNORED_TYPES includes progress and last-prompt alongside queue-operation', () => {
+  // Validate the canonical set in session_normalization.js (single source of truth).
+  const { LIVE_EVENT_IGNORED_TYPES } = require('../../../stubs/cowork/session_normalization.js');
   const expectedTypes = ['queue-operation', 'progress', 'last-prompt', 'rate_limit_event'];
   for (const type of expectedTypes) {
-    assert.ok(setContents.includes(`'${type}'`), `missing type: ${type}`);
+    assert.ok(LIVE_EVENT_IGNORED_TYPES.has(type), `missing type: ${type}`);
   }
+  assert.strictEqual(LIVE_EVENT_IGNORED_TYPES.size, expectedTypes.length, 'unexpected extra types in set');
 });
 
-test('getIgnoredLiveMessageType only filters onEvent channels', () => {
-  // Validate the channel guard by parsing the source — the function is in module scope.
-  const wrapperPath = path.join(__dirname, '..', '..', '..', 'stubs', 'frame-fix', 'frame-fix-wrapper.js');
-  const source = fs.readFileSync(wrapperPath, 'utf8');
-
-  // getIgnoredLiveMessageType must check for onEvent channels
-  const fnMatch = source.match(/function getIgnoredLiveMessageType\([\s\S]*?^}/m);
-  assert.ok(fnMatch, 'getIgnoredLiveMessageType function not found');
-  assert.ok(fnMatch[0].includes('LocalAgentModeSessions_$_onEvent'), 'must guard on LocalAgentModeSessions onEvent');
-  assert.ok(fnMatch[0].includes('LocalSessions_$_onEvent'), 'must guard on LocalSessions onEvent');
+test('isIgnoredLiveEventType only filters onEvent channels', () => {
+  // Validate the channel guard in the consolidated isIgnoredLiveEventType.
+  const { isIgnoredLiveEventType } = require('../../../stubs/cowork/session_normalization.js');
+  // Should filter onEvent channels with a matching payload type
+  assert.strictEqual(
+    isIgnoredLiveEventType('$eipc_message$_uuid_$_ns_$_LocalAgentModeSessions_$_onEvent', { type: 'progress' }),
+    'progress',
+  );
+  assert.strictEqual(
+    isIgnoredLiveEventType('$eipc_message$_uuid_$_ns_$_LocalSessions_$_onEvent', { type: 'rate_limit_event' }),
+    'rate_limit_event',
+  );
+  // Should NOT filter non-onEvent channels
+  assert.strictEqual(
+    isIgnoredLiveEventType('$eipc_message$_uuid_$_ns_$_LocalAgentModeSessions_$_getSession', { type: 'progress' }),
+    null,
+  );
+  // Should NOT filter non-ignored types
+  assert.strictEqual(
+    isIgnoredLiveEventType('$eipc_message$_uuid_$_ns_$_LocalAgentModeSessions_$_onEvent', { type: 'assistant' }),
+    null,
+  );
 });
 
 test('registerElectronAppListener degrades safely when electron app is unavailable', () => {

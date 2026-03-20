@@ -547,15 +547,7 @@ const SESSIONS_BASE = DIRS.claudeSessionsBase;
 
 console.log('[Cowork] Linux support enabled - VM will be emulated');
 
-// @session-refactor:NORM-001 DEFINITION — message types to drop from live events (frame-fix-wrapper.js)
-// NOTE: This set differs from local_session_bridge.js's IGNORED_LIVE_MESSAGE_TYPES (NORM-002)
-// This set includes metadata types (queue-operation, progress, last-prompt) + rate_limit_event
-const IGNORED_LIVE_MESSAGE_TYPES = new Set([
-  'queue-operation',
-  'progress',
-  'last-prompt',
-  'rate_limit_event',
-]);
+const { isIgnoredLiveEventType } = require('../cowork/session_normalization.js');
 
 function parseRequestedProcessId(args) {
   for (const arg of args) {
@@ -607,26 +599,9 @@ async function getCoworkProcessRunningState(processId) {
   return { running: false, exitCode: 0 };
 }
 
-// @session-refactor:NORM-003 DEFINITION — check if live event should be dropped based on message type
+// Delegates to consolidated isIgnoredLiveEventType in session_orchestrator.js
 function getIgnoredLiveMessageType(channel, payload) {
-  if (typeof channel !== 'string') {
-    return null;
-  }
-  if (!channel.includes('LocalAgentModeSessions_$_onEvent') && !channel.includes('LocalSessions_$_onEvent')) {
-    return null;
-  }
-  if (!payload || typeof payload !== 'object') {
-    return null;
-  }
-
-  // @session-refactor:NORM-001 CALLER — uses IGNORED_LIVE_MESSAGE_TYPES from frame-fix-wrapper.js
-  if (payload.type === 'message' && payload.message && typeof payload.message === 'object') {
-    const messageType = payload.message.type;
-    return IGNORED_LIVE_MESSAGE_TYPES.has(messageType) ? messageType : null;
-  }
-
-  // @session-refactor:NORM-001 CALLER — uses IGNORED_LIVE_MESSAGE_TYPES from frame-fix-wrapper.js
-  return IGNORED_LIVE_MESSAGE_TYPES.has(payload.type) ? payload.type : null;
+  return isIgnoredLiveEventType(channel, payload);
 }
 
 function logIgnoredLiveMessage(channel, payload, messageType) {

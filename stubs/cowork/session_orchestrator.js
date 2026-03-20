@@ -1065,25 +1065,300 @@ class SessionOrchestrator {
     };
   }
 
-  // @session-refactor:NORM-100 TARGET — consolidated message type filtering will land here
-  // consolidate: NORM-001, NORM-002, NORM-004, NORM-007
-  // method signature: filterMessagesByType(messages, filterConfig)
+  // --- NORM-103 TARGET: live event dispatch (Phase 4) ---
+  // --- NORM-104 TARGET: metadata persistence stays in session_store.js ---
+}
 
-  // @session-refactor:NORM-101 TARGET — consolidated session record normalization will land here
-  // consolidate: NORM-020, NORM-021, NORM-025
-  // method signature: normalizeSessionRecord(sessionData, context)
+// Phase 1: Message type filtering — constants and functions live in
+// session_normalization.js (leaf module with zero project imports).
+const {
+  LIVE_EVENT_IGNORED_TYPES,
+  LIVE_EVENT_METADATA_TYPES,
+  TRANSCRIPT_IGNORED_TYPES,
+  SDK_STDOUT_IGNORED_TYPES,
+  isIgnoredLiveEventType,
+  filterTranscriptMessages,
+  getIgnoredSdkMessageType,
+} = require('./session_normalization.js');
 
-  // @session-refactor:NORM-102 TARGET — consolidated SDK message transformation will land here
-  // consolidate: NORM-040, NORM-041, NORM-042, NORM-043, NORM-044, NORM-045
-  // method signature: transformSdkMessages(messages, sessionId)
+// =============================================================================
+// PHASE 3: Consolidated SDK Message Transformation (NORM-102)
+// =============================================================================
 
-  // @session-refactor:NORM-103 TARGET — consolidated live event dispatch normalization will land here
-  // consolidate: NORM-060, NORM-061, NORM-062, NORM-063, NORM-064
-  // method signature: normalizeLiveEvent(channel, payload, sessionId)
+function cloneSerializable(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (_) {
+    return value;
+  }
+}
 
-  // @session-refactor:NORM-104 TARGET — consolidated metadata persistence will land here
-  // consolidate: NORM-080, NORM-081, NORM-082, NORM-083, NORM-084, NORM-085, NORM-086, NORM-087
-  // method signature: installMetadataPersistence(config)
+function isAssistantSdkMessage(message) {
+  return !!(
+    message &&
+    typeof message === 'object' &&
+    message.type === 'assistant' &&
+    message.message &&
+    typeof message.message === 'object' &&
+    message.message.type === 'message' &&
+    message.message.role === 'assistant' &&
+    Array.isArray(message.message.content)
+  );
+}
+
+function cloneMessageContent(content) {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.map((block) => {
+    if (!block || typeof block !== 'object') {
+      return block;
+    }
+    const clonedBlock = { ...block };
+    delete clonedBlock.__coworkPartialJson;
+    return clonedBlock;
+  });
+}
+
+function cloneAssistantSdkMessage(message) {
+  if (!isAssistantSdkMessage(message)) {
+    return null;
+  }
+  return {
+    ...message,
+    message: {
+      ...message.message,
+      content: cloneMessageContent(message.message.content),
+    },
+  };
+}
+
+function mergeStreamingText(previousValue, nextValue) {
+  if (typeof previousValue !== 'string' || !previousValue) {
+    return typeof nextValue === 'string' ? nextValue : previousValue;
+  }
+  if (typeof nextValue !== 'string' || !nextValue) {
+    return previousValue;
+  }
+  if (nextValue.startsWith(previousValue)) {
+    return nextValue;
+  }
+  if (previousValue.startsWith(nextValue) || previousValue.endsWith(nextValue)) {
+    return previousValue;
+  }
+  return previousValue + nextValue;
+}
+
+function findMergeableAssistantBlockIndex(previousBlocks, nextBlock, fallbackIndex) {
+  if (!Array.isArray(previousBlocks) || !nextBlock || typeof nextBlock !== 'object') {
+    return -1;
+  }
+
+  if (nextBlock.id) {
+    const byIdIndex = previousBlocks.findIndex((block) => block && typeof block === 'object' && block.id === nextBlock.id);
+    if (byIdIndex !== -1) {
+      return byIdIndex;
+    }
+  }
+
+  const fallbackBlock = previousBlocks[fallbackIndex];
+  if (fallbackBlock && typeof fallbackBlock === 'object' && fallbackBlock.type === nextBlock.type) {
+    return fallbackIndex;
+  }
+
+  return -1;
+}
+
+function mergeAssistantContentBlock(previousBlock, nextBlock) {
+  if (!previousBlock || typeof previousBlock !== 'object') {
+    return nextBlock && typeof nextBlock === 'object' ? { ...nextBlock } : nextBlock;
+  }
+  if (!nextBlock || typeof nextBlock !== 'object') {
+    return { ...previousBlock };
+  }
+  if (previousBlock.type !== nextBlock.type) {
+    return { ...nextBlock };
+  }
+
+  const mergedBlock = {
+    ...previousBlock,
+    ...nextBlock,
+  };
+
+  if (mergedBlock.type === 'text') {
+    mergedBlock.text = mergeStreamingText(previousBlock.text, nextBlock.text);
+    if (Array.isArray(previousBlock.citations) || Array.isArray(nextBlock.citations)) {
+      mergedBlock.citations = [
+        ...(Array.isArray(previousBlock.citations) ? previousBlock.citations : []),
+        ...(Array.isArray(nextBlock.citations) ? nextBlock.citations : []),
+      ];
+    }
+  } else if (mergedBlock.type === 'thinking') {
+    mergedBlock.thinking = mergeStreamingText(previousBlock.thinking, nextBlock.thinking);
+    mergedBlock.signature = nextBlock.signature || previousBlock.signature || '';
+  } else if (mergedBlock.type === 'tool_use') {
+    if (previousBlock.input && nextBlock.input && typeof previousBlock.input === 'object' && typeof nextBlock.input === 'object') {
+      mergedBlock.input = {
+        ...previousBlock.input,
+        ...nextBlock.input,
+      };
+    } else if (nextBlock.input === undefined) {
+      mergedBlock.input = previousBlock.input;
+    }
+  } else if (mergedBlock.type === 'tool_result') {
+    if (Array.isArray(previousBlock.content) || Array.isArray(nextBlock.content)) {
+      mergedBlock.content = [
+        ...(Array.isArray(previousBlock.content) ? previousBlock.content : []),
+        ...(Array.isArray(nextBlock.content) ? nextBlock.content : []),
+      ];
+    }
+  }
+
+  if ('__coworkPartialJson' in previousBlock || '__coworkPartialJson' in nextBlock) {
+    mergedBlock.__coworkPartialJson = mergeStreamingText(previousBlock.__coworkPartialJson, nextBlock.__coworkPartialJson);
+  }
+
+  return mergedBlock;
+}
+
+function mergeAssistantContent(previousContent, nextContent) {
+  const mergedContent = cloneMessageContent(previousContent);
+  const normalizedNextContent = cloneMessageContent(nextContent);
+
+  for (let index = 0; index < normalizedNextContent.length; index += 1) {
+    const nextBlock = normalizedNextContent[index];
+    if (!nextBlock || typeof nextBlock !== 'object') {
+      mergedContent.push(nextBlock);
+      continue;
+    }
+
+    const targetIndex = findMergeableAssistantBlockIndex(mergedContent, nextBlock, index);
+    if (targetIndex === -1) {
+      mergedContent.push({ ...nextBlock });
+      continue;
+    }
+
+    mergedContent[targetIndex] = mergeAssistantContentBlock(mergedContent[targetIndex], nextBlock);
+  }
+
+  return mergedContent;
+}
+
+function mergeAssistantSdkMessages(previousMessage, nextMessage) {
+  if (!isAssistantSdkMessage(previousMessage) || !isAssistantSdkMessage(nextMessage)) {
+    return null;
+  }
+
+  const previousId = previousMessage.message && previousMessage.message.id;
+  const nextId = nextMessage.message && nextMessage.message.id;
+  if (!previousId || !nextId || previousId !== nextId) {
+    return null;
+  }
+
+  return {
+    ...previousMessage,
+    ...nextMessage,
+    uuid: previousMessage.uuid || nextMessage.uuid,
+    session_id: previousMessage.session_id || nextMessage.session_id,
+    parent_tool_use_id: previousMessage.parent_tool_use_id ?? nextMessage.parent_tool_use_id ?? null,
+    message: {
+      ...previousMessage.message,
+      ...nextMessage.message,
+      content: mergeAssistantContent(previousMessage.message.content, nextMessage.message.content),
+    },
+  };
+}
+
+function mergeConsecutiveAssistantMessages(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return messages;
+  }
+
+  const mergedMessages = [];
+  for (const message of messages) {
+    const previousMessage = mergedMessages[mergedMessages.length - 1];
+    const mergedAssistantMessage = mergeAssistantSdkMessages(previousMessage, message);
+    if (mergedAssistantMessage) {
+      mergedMessages[mergedMessages.length - 1] = mergedAssistantMessage;
+      continue;
+    }
+    mergedMessages.push(message);
+  }
+  return mergedMessages;
+}
+
+function getSdkMessageSessionId(message) {
+  if (!message || typeof message !== 'object') {
+    return null;
+  }
+  if (typeof message.sessionId === 'string') {
+    return message.sessionId;
+  }
+  if (typeof message.session_id === 'string') {
+    return message.session_id;
+  }
+  if (message.message && typeof message.message === 'object') {
+    if (typeof message.message.sessionId === 'string') {
+      return message.message.sessionId;
+    }
+    if (typeof message.message.session_id === 'string') {
+      return message.message.session_id;
+    }
+  }
+  return null;
+}
+
+function inferLocalSessionIdFromMessages(messages) {
+  if (!Array.isArray(messages)) {
+    return null;
+  }
+  for (const message of messages) {
+    const sessionId = getSdkMessageSessionId(message);
+    if (typeof sessionId === 'string' && sessionId.startsWith('local_')) {
+      return sessionId;
+    }
+  }
+  return null;
+}
+
+function transformSdkMessages(messages, sessionIdOverride) {
+  if (!Array.isArray(messages)) {
+    return messages;
+  }
+
+  const sessionId = typeof sessionIdOverride === 'string' && sessionIdOverride.startsWith('local_')
+    ? sessionIdOverride
+    : inferLocalSessionIdFromMessages(messages);
+  const normalizedMessages = [];
+
+  for (const message of messages) {
+    if (!message || typeof message !== 'object') {
+      continue;
+    }
+
+    if (LIVE_EVENT_METADATA_TYPES.has(message.type)) {
+      continue;
+    }
+    if (LIVE_EVENT_IGNORED_TYPES.has(message.type)) {
+      continue;
+    }
+
+    if (message.type === 'message' && message.message && typeof message.message === 'object') {
+      if (LIVE_EVENT_METADATA_TYPES.has(message.message.type)) {
+        continue;
+      }
+      if (LIVE_EVENT_IGNORED_TYPES.has(message.message.type)) {
+        continue;
+      }
+    }
+
+    normalizedMessages.push(message);
+  }
+
+  return mergeConsecutiveAssistantMessages(normalizedMessages);
 }
 
 // Global Claude Code config directory (skills, commands, settings, etc.)
@@ -1156,4 +1431,19 @@ module.exports = {
   createSessionOrchestrator,
   removeResumeArgs,
   symlinkGlobalConfig,
+  // Phase 1: Message type filtering
+  LIVE_EVENT_IGNORED_TYPES,
+  LIVE_EVENT_METADATA_TYPES,
+  TRANSCRIPT_IGNORED_TYPES,
+  SDK_STDOUT_IGNORED_TYPES,
+  isIgnoredLiveEventType,
+  filterTranscriptMessages,
+  getIgnoredSdkMessageType,
+  // Phase 3: SDK message transformation
+  transformSdkMessages,
+  mergeConsecutiveAssistantMessages,
+  mergeAssistantSdkMessages,
+  isAssistantSdkMessage,
+  cloneAssistantSdkMessage,
+  cloneSerializable,
 };

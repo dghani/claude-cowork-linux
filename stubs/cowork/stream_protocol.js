@@ -1,27 +1,6 @@
 'use strict';
 
-// @session-refactor:NORM-010 DEFINITION — filter ignored types from raw SDK stdout lines (subset: queue-operation, rate_limit_event)
-function getIgnoredSdkMessageType(line) {
-  if (typeof line !== 'string') {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(line);
-    if (!parsed || typeof parsed !== 'object') {
-      return null;
-    }
-    if (parsed.type === 'queue-operation' || parsed.type === 'rate_limit_event') {
-      return parsed.type;
-    }
-    if (parsed.type === 'message' && parsed.message && typeof parsed.message === 'object') {
-      const nestedType = parsed.message.type;
-      if (nestedType === 'queue-operation' || nestedType === 'rate_limit_event') {
-        return nestedType;
-      }
-    }
-  } catch (_) {}
-  return null;
-}
+const { getIgnoredSdkMessageType } = require('./session_normalization.js');
 
 function parseJsonLine(line) {
   if (typeof line !== 'string') {

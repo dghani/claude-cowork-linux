@@ -1,14 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-// @session-refactor:NORM-004 DEFINITION — message types to drop from transcript reads (asar_adapter.js)
-// NOTE: Same set as NORM-001 (frame-fix-wrapper.js) but used for transcript filtering, not live events
-const IGNORED_LOCAL_SESSION_MESSAGE_TYPES = new Set([
-  'last-prompt',
-  'progress',
-  'queue-operation',
-  'rate_limit_event',
-]);
+const { filterTranscriptMessages } = require('./session_normalization.js');
 
 // Compute the macOS-style legacy path that the asar's minified code constructs
 // and the XDG path that Electron actually uses on Linux.
@@ -51,29 +44,7 @@ function isLocalSessionResultChannel(channel) {
     normalizedChannel.includes('gettranscript');
 }
 
-// @session-refactor:NORM-005 DEFINITION — filter transcript messages, removing ignored types
-function filterTranscriptMessages(result) {
-  if (!Array.isArray(result)) {
-    return result;
-  }
-
-  return result.filter((message) => {
-    if (!message || typeof message !== 'object') {
-      return false;
-    }
-    // @session-refactor:NORM-004 CALLER — uses IGNORED_LOCAL_SESSION_MESSAGE_TYPES
-    if (IGNORED_LOCAL_SESSION_MESSAGE_TYPES.has(message.type)) {
-      return false;
-    }
-    // @session-refactor:NORM-004 CALLER — uses IGNORED_LOCAL_SESSION_MESSAGE_TYPES (nested message)
-    if (message.type === 'message' && message.message && typeof message.message === 'object') {
-      if (IGNORED_LOCAL_SESSION_MESSAGE_TYPES.has(message.message.type)) {
-        return false;
-      }
-    }
-    return true;
-  });
-}
+// filterTranscriptMessages imported from session_orchestrator.js
 
 function isLocalSessionMutationChannel(channel) {
   if (typeof channel !== 'string') {

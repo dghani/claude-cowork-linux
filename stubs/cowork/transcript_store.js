@@ -1,13 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-// @session-refactor:NORM-009 DEFINITION — message types to exclude from transcript conversation analysis (same 4 values as NORM-001, NORM-004)
-const IGNORED_MESSAGE_TYPES = new Set([
-  'last-prompt',
-  'progress',
-  'queue-operation',
-  'rate_limit_event',
-]);
+const { TRANSCRIPT_IGNORED_TYPES } = require('./session_normalization.js');
 
 const RESUMABLE_MESSAGE_TYPES = new Set([
   'assistant',
@@ -55,7 +49,7 @@ function isConversationBearingMessage(message) {
   if (!messageType) {
     return false;
   }
-  if (IGNORED_MESSAGE_TYPES.has(messageType)) {
+  if (TRANSCRIPT_IGNORED_TYPES.has(messageType)) {
     return false;
   }
   if (RESUMABLE_MESSAGE_TYPES.has(messageType)) {
