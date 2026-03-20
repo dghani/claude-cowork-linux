@@ -230,9 +230,9 @@ test('claude-swift provisions a remote session via bridge-state.json and /bridge
   // Bridge-state.json maps local -> remote session
   const bridgeStateDir = path.join(tempHome, '.config', 'Claude');
   fs.mkdirSync(bridgeStateDir, { recursive: true });
-  fs.writeFileSync(path.join(bridgeStateDir, 'bridge-state.json'), JSON.stringify([
-    { localSessionId: 'local_demo_session', remoteSessionId: 'remote-created' },
-  ]), 'utf8');
+  fs.writeFileSync(path.join(bridgeStateDir, 'bridge-state.json'), JSON.stringify({
+    'user:org': { remoteSessionId: 'cse_remote-created', localSessionId: 'local_ditto_org' },
+  }), 'utf8');
   fs.writeFileSync(workerPath, `
     const fs = require('fs');
     fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2), null, 2));
@@ -279,14 +279,14 @@ test('claude-swift provisions a remote session via bridge-state.json and /bridge
   assert.deepEqual(spawnedArgs, [
     '--print',
     '--session-id',
-    'remote-created',
+    'cse_remote-created',
     '--input-format',
     'stream-json',
     '--output-format',
     'stream-json',
     '--replay-user-messages',
     '--sdk-url',
-    'wss://api.anthropic.com/v1/code/sessions/remote-created',
+    'wss://api.anthropic.com/v1/code/sessions/cse_remote-created',
     '--model',
     'claude-opus-4-6',
   ]);

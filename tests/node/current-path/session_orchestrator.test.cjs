@@ -204,11 +204,11 @@ test('prepareVmSpawn provisions a bridge session via bridge-state.json + /bridge
     userSelectedFolders: [workspaceRoot],
   }, null, 2) + '\n', 'utf8');
 
-  // Bridge-state.json maps localSessionId -> remoteSessionId
+  // Bridge-state.json: dict keyed by userId:orgId, one entry per dispatch env
   const bridgePath = path.join(tempRoot, 'bridge-state.json');
-  fs.writeFileSync(bridgePath, JSON.stringify([
-    { localSessionId: sessionId, remoteSessionId: 'remote-created' },
-  ]), 'utf8');
+  fs.writeFileSync(bridgePath, JSON.stringify({
+    'user:org': { remoteSessionId: 'cse_remote-created', localSessionId: 'local_ditto_org' },
+  }), 'utf8');
 
   const seenFetchCalls = [];
   const sessionStore = createSessionStore({ localAgentRoot });
@@ -246,14 +246,14 @@ test('prepareVmSpawn provisions a bridge session via bridge-state.json + /bridge
   assert.deepEqual(result.args, [
     '--print',
     '--session-id',
-    'remote-created',
+    'cse_remote-created',
     '--input-format',
     'stream-json',
     '--output-format',
     'stream-json',
     '--replay-user-messages',
     '--sdk-url',
-    'wss://api.anthropic.com/v1/code/sessions/remote-created',
+    'wss://api.anthropic.com/v1/code/sessions/cse_remote-created',
     '--model',
     'claude-opus-4-6',
     '--add-dir',
@@ -265,7 +265,7 @@ test('prepareVmSpawn provisions a bridge session via bridge-state.json + /bridge
   assert.equal(result.envVars.CLAUDE_CODE_IS_COWORK, '1');
   assert.equal(result.envVars.CLAUDE_CODE_USE_COWORK_PLUGINS, '1');
   assert.equal(seenFetchCalls.length, 1);
-  assert.equal(seenFetchCalls[0], 'remote-created');
+  assert.equal(seenFetchCalls[0], 'cse_remote-created');
   assert.ok(result.bridgeSession);
   assert.equal(result.bridgeSession.source, 'bridge_api');
 });

@@ -126,25 +126,33 @@ test('fetchBridgeCredentials encodes remoteSessionId in URL', () => {
 // readRemoteSessionIdFromBridgeState
 // ============================================================================
 
-test('readRemoteSessionIdFromBridgeState finds matching entry', (t) => {
+test('readRemoteSessionIdFromBridgeState finds first cse_* entry in dict-keyed file', (t) => {
   const tempRoot = createTempDir(t);
   const bridgePath = path.join(tempRoot, 'bridge-state.json');
-  fs.writeFileSync(bridgePath, JSON.stringify([
-    { localSessionId: 'local_ditto_abc', remoteSessionId: 'cse_123', enabled: true },
-    { localSessionId: 'local_ditto_def', remoteSessionId: 'cse_456', enabled: true },
-  ]), 'utf8');
+  fs.writeFileSync(bridgePath, JSON.stringify({
+    'user-uuid:org-uuid': {
+      enabled: true,
+      localSessionId: 'local_ditto_abc',
+      remoteSessionId: 'cse_dispatch_real',
+      processedMessageUuids: [],
+    },
+  }), 'utf8');
 
-  const result = readRemoteSessionIdFromBridgeState('local_ditto_abc', {
+  const traces = [];
+  const result = readRemoteSessionIdFromBridgeState({
     bridgeStatePath: bridgePath,
+    trace: (msg) => traces.push(msg),
     waitMs: 1,
   });
-  assert.equal(result, 'cse_123');
+  assert.equal(result, 'cse_dispatch_real');
+  assert.ok(traces.some((m) => m.includes('found remoteSessionId=cse_dispatch_real')));
+  assert.ok(traces.some((m) => m.includes('schema') && m.includes('entryCount=1')));
 });
 
 test('readRemoteSessionIdFromBridgeState returns null for missing file', (t) => {
   const tempRoot = createTempDir(t);
   const traces = [];
-  const result = readRemoteSessionIdFromBridgeState('local_ditto_abc', {
+  const result = readRemoteSessionIdFromBridgeState({
     bridgeStatePath: path.join(tempRoot, 'nonexistent.json'),
     trace: (msg) => traces.push(msg),
     waitMs: 1,
@@ -159,7 +167,7 @@ test('readRemoteSessionIdFromBridgeState returns null for parse error', (t) => {
   fs.writeFileSync(bridgePath, 'not-json{{{', 'utf8');
 
   const traces = [];
-  const result = readRemoteSessionIdFromBridgeState('local_ditto_abc', {
+  const result = readRemoteSessionIdFromBridgeState({
     bridgeStatePath: bridgePath,
     trace: (msg) => traces.push(msg),
     waitMs: 1,
@@ -168,108 +176,57 @@ test('readRemoteSessionIdFromBridgeState returns null for parse error', (t) => {
   assert.ok(traces.some((m) => m.includes('parse-error')));
 });
 
-test('readRemoteSessionIdFromBridgeState returns null when no match', (t) => {
+test('readRemoteSessionIdFromBridgeState returns null when no cse_* entries', (t) => {
   const tempRoot = createTempDir(t);
   const bridgePath = path.join(tempRoot, 'bridge-state.json');
-  fs.writeFileSync(bridgePath, JSON.stringify([
-    { localSessionId: 'local_ditto_other', remoteSessionId: 'cse_999' },
-  ]), 'utf8');
+  fs.writeFileSync(bridgePath, JSON.stringify({
+    'user:org': { localSessionId: 'local_ditto_x', remoteSessionId: 'not-a-cse-id' },
+  }), 'utf8');
 
   const traces = [];
-  const result = readRemoteSessionIdFromBridgeState('local_ditto_abc', {
+  const result = readRemoteSessionIdFromBridgeState({
     bridgeStatePath: bridgePath,
     trace: (msg) => traces.push(msg),
     waitMs: 1,
   });
   assert.equal(result, null);
-  assert.ok(traces.some((m) => m.includes('no-match')));
-});
-
-test('readRemoteSessionIdFromBridgeState logs schema canary on first read', (t) => {
-  const tempRoot = createTempDir(t);
-  const bridgePath = path.join(tempRoot, 'bridge-state.json');
-  fs.writeFileSync(bridgePath, JSON.stringify([
-    { enabled: true, localSessionId: 'local_abc', remoteSessionId: 'cse_1', userConsented: false },
-  ]), 'utf8');
-
-  const traces = [];
-  readRemoteSessionIdFromBridgeState('local_abc', {
-    bridgeStatePath: bridgePath,
-    trace: (msg) => traces.push(msg),
-    waitMs: 1,
-  });
-  assert.ok(traces.some((m) => m.includes('schema') && m.includes('entryCount=1') && m.includes('fieldNames=')));
+  assert.ok(traces.some((m) => m.includes('no cse_* entry')));
 });
 
 test('readRemoteSessionIdFromBridgeState retries when file appears later', (t) => {
-  const tempRoot = createTempDir(t);
-  const bridgePath = path.join(tempRoot, 'bridge-state.json');
-
   let readCount = 0;
-  const mockReadFile = (filePath, encoding) => {
-    readCount++;
-    if (readCount < 3) {
-      const err = new Error('ENOENT');
-      err.code = 'ENOENT';
-      throw err;
-    }
-    return JSON.stringify([
-      { localSessionId: 'local_abc', remoteSessionId: 'cse_found' },
-    ]);
-  };
-
-  const result = readRemoteSessionIdFromBridgeState('local_abc', {
-    bridgeStatePath: bridgePath,
-    readFileSync: mockReadFile,
+  const result = readRemoteSessionIdFromBridgeState({
+    bridgeStatePath: '/fake/path',
+    readFileSync: () => {
+      readCount++;
+      if (readCount < 3) {
+        const err = new Error('ENOENT');
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return JSON.stringify({
+        'u:o': { remoteSessionId: 'cse_found' },
+      });
+    },
     waitMs: 1,
   });
   assert.equal(result, 'cse_found');
   assert.equal(readCount, 3);
 });
 
-test('readRemoteSessionIdFromBridgeState handles dict keyed by userId:orgId (real schema)', (t) => {
-  const tempRoot = createTempDir(t);
-  const bridgePath = path.join(tempRoot, 'bridge-state.json');
-  fs.writeFileSync(bridgePath, JSON.stringify({
-    'user-uuid:org-uuid': {
-      enabled: true,
-      userConsented: true,
-      environmentId: 'env_abc',
-      localSessionId: 'local_ditto_abc',
-      remoteSessionId: 'cse_dispatch_real',
-      processedMessageUuids: ['msg-1', 'msg-2'],
-    },
-  }), 'utf8');
-
-  const traces = [];
-  const result = readRemoteSessionIdFromBridgeState('local_ditto_abc', {
-    bridgeStatePath: bridgePath,
-    trace: (msg) => traces.push(msg),
-    waitMs: 1,
-  });
-  assert.equal(result, 'cse_dispatch_real');
-  assert.ok(traces.some((m) => m.includes('schema') && m.includes('entryCount=1')));
-});
-
 test('readRemoteSessionIdFromBridgeState skips non-object values in dict', (t) => {
   const tempRoot = createTempDir(t);
   const bridgePath = path.join(tempRoot, 'bridge-state.json');
-  // Dict with a string value (not a session entry) — should be skipped
   fs.writeFileSync(bridgePath, JSON.stringify({
     'version': 'not-an-object',
-    'user:org': { localSessionId: 'local_abc', remoteSessionId: 'cse_nested' },
+    'user:org': { remoteSessionId: 'cse_nested' },
   }), 'utf8');
 
-  const result = readRemoteSessionIdFromBridgeState('local_abc', {
+  const result = readRemoteSessionIdFromBridgeState({
     bridgeStatePath: bridgePath,
     waitMs: 1,
   });
   assert.equal(result, 'cse_nested');
-});
-
-test('readRemoteSessionIdFromBridgeState returns null for missing localSessionId param', () => {
-  const result = readRemoteSessionIdFromBridgeState('', { waitMs: 1 });
-  assert.equal(result, null);
 });
 
 // ============================================================================
@@ -335,9 +292,9 @@ test('_resolveBridgeSession returns bridge_api result when bridge-state and /bri
   }, null, 2) + '\n', 'utf8');
 
   const bridgePath = path.join(tempRoot, 'bridge-state.json');
-  fs.writeFileSync(bridgePath, JSON.stringify([
-    { localSessionId: sessionId, remoteSessionId: 'cse_dispatch_1' },
-  ]), 'utf8');
+  fs.writeFileSync(bridgePath, JSON.stringify({
+    'user:org': { remoteSessionId: 'cse_dispatch_1', localSessionId: 'local_ditto_org' },
+  }), 'utf8');
 
   const { createSessionStore } = require('../../../stubs/cowork/session_store.js');
   const sessionStore = createSessionStore({ localAgentRoot });
@@ -407,9 +364,9 @@ test('_resolveBridgeSession graceful degradation when no bridge-state match', (t
     cwd: workspaceRoot,
   }, null, 2) + '\n', 'utf8');
 
-  // Empty bridge-state
+  // Empty bridge-state (no entries)
   const bridgePath = path.join(tempRoot, 'bridge-state.json');
-  fs.writeFileSync(bridgePath, JSON.stringify([]), 'utf8');
+  fs.writeFileSync(bridgePath, JSON.stringify({}), 'utf8');
 
   const { createSessionStore } = require('../../../stubs/cowork/session_store.js');
   const sessionStore = createSessionStore({ localAgentRoot });
@@ -441,7 +398,7 @@ test('_resolveBridgeSession graceful degradation when no bridge-state match', (t
   assert.notEqual(result.envVars.CLAUDE_CODE_ENVIRONMENT_KIND, 'bridge');
   assert.equal(result.envVars.CLAUDE_CODE_OAUTH_TOKEN, 'test-oauth');
   assert.equal(result.bridgeSession, null);
-  assert.ok(traces.some((m) => m.includes('no bridge-state match')));
+  assert.ok(traces.some((m) => m.includes('no bridge-state entry')));
 });
 
 // ============================================================================
