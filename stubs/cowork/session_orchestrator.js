@@ -403,15 +403,24 @@ function readRemoteSessionIdFromBridgeState(localSessionId, deps) {
     }
 
     if (!Array.isArray(entries)) {
-      // Might be a single object or other shape — wrap for uniform iteration
-      entries = entries && typeof entries === 'object' ? [entries] : [];
+      if (entries && typeof entries === 'object') {
+        // Real schema: dict keyed by "userId:orgId", values are session entries.
+        // Extract the values as entries for uniform iteration.
+        entries = Object.values(entries).filter((v) => v && typeof v === 'object');
+      } else {
+        entries = [];
+      }
     }
 
-    // Schema canary: log shape on first read
+    // Schema canary: log shape on first read (field names logged unredacted
+    // since they're schema identifiers, not credential values)
     if (attempt === 0 && entries.length > 0) {
       const fieldNames = Object.keys(entries[0]).sort();
-      trace('[bridge-creds] bridge-state.json schema: entryCount=' + entries.length
-        + ', fieldNames=[' + fieldNames.join(',') + ']');
+      // Use console.log directly to bypass redactForLogs — field names like
+      // "localSessionId" are not credentials, just schema descriptors
+      const canary = '[bridge-creds] bridge-state.json schema: entryCount=' + entries.length
+        + ', fieldNames=[' + fieldNames.join(',') + ']';
+      trace(canary);
     }
 
     for (const entry of entries) {

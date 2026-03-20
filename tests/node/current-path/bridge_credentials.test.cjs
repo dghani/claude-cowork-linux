@@ -227,18 +227,44 @@ test('readRemoteSessionIdFromBridgeState retries when file appears later', (t) =
   assert.equal(readCount, 3);
 });
 
-test('readRemoteSessionIdFromBridgeState handles single object instead of array', (t) => {
+test('readRemoteSessionIdFromBridgeState handles dict keyed by userId:orgId (real schema)', (t) => {
   const tempRoot = createTempDir(t);
   const bridgePath = path.join(tempRoot, 'bridge-state.json');
-  fs.writeFileSync(bridgePath, JSON.stringify(
-    { localSessionId: 'local_abc', remoteSessionId: 'cse_single' }
-  ), 'utf8');
+  fs.writeFileSync(bridgePath, JSON.stringify({
+    'user-uuid:org-uuid': {
+      enabled: true,
+      userConsented: true,
+      environmentId: 'env_abc',
+      localSessionId: 'local_ditto_abc',
+      remoteSessionId: 'cse_dispatch_real',
+      processedMessageUuids: ['msg-1', 'msg-2'],
+    },
+  }), 'utf8');
+
+  const traces = [];
+  const result = readRemoteSessionIdFromBridgeState('local_ditto_abc', {
+    bridgeStatePath: bridgePath,
+    trace: (msg) => traces.push(msg),
+    waitMs: 1,
+  });
+  assert.equal(result, 'cse_dispatch_real');
+  assert.ok(traces.some((m) => m.includes('schema') && m.includes('entryCount=1')));
+});
+
+test('readRemoteSessionIdFromBridgeState skips non-object values in dict', (t) => {
+  const tempRoot = createTempDir(t);
+  const bridgePath = path.join(tempRoot, 'bridge-state.json');
+  // Dict with a string value (not a session entry) — should be skipped
+  fs.writeFileSync(bridgePath, JSON.stringify({
+    'version': 'not-an-object',
+    'user:org': { localSessionId: 'local_abc', remoteSessionId: 'cse_nested' },
+  }), 'utf8');
 
   const result = readRemoteSessionIdFromBridgeState('local_abc', {
     bridgeStatePath: bridgePath,
     waitMs: 1,
   });
-  assert.equal(result, 'cse_single');
+  assert.equal(result, 'cse_nested');
 });
 
 test('readRemoteSessionIdFromBridgeState returns null for missing localSessionId param', () => {
