@@ -278,6 +278,10 @@ function installLinuxMenuInterceptors(electronModule) {
 
   menuApi.setApplicationMenu = function(menu) {
     global.__coworkApplicationMenu = menu;
+    // Call the original so Electron's native binding stays intact
+    if (originalSetAppMenu) {
+      try { originalSetAppMenu(menu); } catch (_) {}
+    }
     hideLinuxMenuBars(electronModule);
     return undefined;
   };
