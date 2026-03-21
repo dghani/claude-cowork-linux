@@ -564,69 +564,39 @@ fs.renameSync = function(oldPath, newPath) {
 // 1. PLATFORM SPOOFING - Immediate, before any app code
 // ============================================================
 
-// Helper to check if call is from system/electron internals
-function isAppCodeCall(stack) {
-  return stack.includes('/.vite/build/index.js') ||
-         stack.includes('/app.asar/.vite/build/index.js') ||
-         stack.includes('/app.asar/') ||
-         stack.includes('/linux-app-extracted/');
-}
+// ── Platform spoofing (performance-critical) ──────────────────────────
+// App code must see darwin/arm64; Electron/Node internals need the real
+// platform. The old approach used new Error().stack on every access —
+// stack trace generation is extremely expensive in V8 and process.platform
+// is read thousands of times per second (CSS, feature detection, Node APIs).
+//
+// New approach: default to 'darwin' (the common case — app code dominates
+// runtime reads) and only use the real platform during the brief module-
+// loading phase when Electron internals call it. A reentrant guard flips
+// to real values when OUR code is executing (frame-fix-wrapper, stubs).
+let _inOurCode = false;
 
-function isSystemCall(stack) {
-  if (isAppCodeCall(stack)) {
-    return false;
-  }
-  return stack.includes('node:internal') ||
-         stack.includes('internal/modules') ||
-         stack.includes('node:electron') ||
-         stack.includes('electron/js2c') ||
-         stack.includes('electron.asar') ||
-         stack.includes('frame-fix-wrapper');
+function withRealPlatform(fn) {
+  _inOurCode = true;
+  try { return fn(); }
+  finally { _inOurCode = false; }
 }
 
 Object.defineProperty(process, 'platform', {
-  get() {
-    const stack = new Error().stack || '';
-    // System/Electron internals need real platform
-    if (isSystemCall(stack)) {
-      return REAL_PLATFORM;
-    }
-    // App code sees darwin (for event logging, feature detection, etc)
-    return 'darwin';
-  },
+  get() { return _inOurCode ? REAL_PLATFORM : 'darwin'; },
   configurable: true
 });
 
 Object.defineProperty(process, 'arch', {
-  get() {
-    const stack = new Error().stack || '';
-    if (isSystemCall(stack)) {
-      return REAL_ARCH;
-    }
-    return 'arm64';
-  },
+  get() { return _inOurCode ? REAL_ARCH : 'arm64'; },
   configurable: true
 });
 
-// Also spoof os.platform() and os.arch()
 const originalOsPlatform = os.platform;
 const originalOsArch = os.arch;
 
-os.platform = function() {
-  const stack = new Error().stack || '';
-  if (isSystemCall(stack)) {
-    return originalOsPlatform.call(os);
-  }
-  return 'darwin';
-};
-
-os.arch = function() {
-  const stack = new Error().stack || '';
-  if (isSystemCall(stack)) {
-    return originalOsArch.call(os);
-  }
-  return 'arm64';
-};
+os.platform = function() { return _inOurCode ? originalOsPlatform.call(os) : 'darwin'; };
+os.arch = function() { return _inOurCode ? originalOsArch.call(os) : 'arm64'; };
 
 // Spoof macOS version
 const originalGetSystemVersion = process.getSystemVersion;
