@@ -155,11 +155,16 @@ fi
 # --perf flag enables Chromium tracing + Node inspector for profiling
 _args=()
 _perf=false
+_dev=false
 for arg in "$@"; do
   if [[ "$arg" == "--devtools" ]]; then
     export CLAUDE_DEVTOOLS=1
+    _dev=true
   elif [[ "$arg" == "--perf" ]]; then
     _perf=true
+    _dev=true
+  elif [[ "$arg" == "--dev" ]]; then
+    _dev=true
   else
     _args+=("$arg")
   fi
@@ -233,9 +238,21 @@ if [[ "$_perf" == true ]]; then
 fi
 
 # Run electron with the repacked app.asar
-echo "Launching Claude Desktop (electron: $ELECTRON_BIN, password-store: $PASSWORD_STORE)..."
-"$ELECTRON_BIN" \
-  "${_electron_args[@]}" \
-  "$@" \
-  2>&1 | tee -a "$LOG_DIR/startup.log"
-exit "${PIPESTATUS[0]}"
+if [[ "$_dev" == true ]]; then
+  # Foreground: terminal stays attached (--dev, --devtools, --perf)
+  echo "Launching Claude Desktop (foreground, electron: $ELECTRON_BIN)..."
+  "$ELECTRON_BIN" \
+    "${_electron_args[@]}" \
+    "$@" \
+    2>&1 | tee -a "$LOG_DIR/startup.log"
+  exit "${PIPESTATUS[0]}"
+else
+  # Default: launch headless, detach from terminal
+  echo "Launching Claude Desktop..."
+  nohup "$ELECTRON_BIN" \
+    "${_electron_args[@]}" \
+    "$@" \
+    >> "$LOG_DIR/startup.log" 2>&1 &
+  disown
+  echo "PID $! — logs: $LOG_DIR/startup.log"
+fi
