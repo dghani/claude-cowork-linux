@@ -186,6 +186,9 @@ function whichApplicationForFile(filename) {
 // _$_Namespace_$_Method pattern regardless of UUID prefix.
 
 function createOverrideRegistry(getProcessState) {
+  // Mutable state shared across handler closures
+  const bridgeState = { enabled: false };
+
   return {
     // ClaudeCode — Code tab readiness
     'ClaudeCode_$_getStatus': async () => 'ready',
@@ -356,8 +359,7 @@ function createOverrideRegistry(getProcessState) {
     },
 
     'LocalAgentModeSessions_$_getSessionsBridgeEnabled': async () => {
-      console.log('[ipc:getSessionsBridgeEnabled] called');
-      return false;
+      return bridgeState.enabled;
     },
 
     'LocalAgentModeSessions_$_kickBridgePoll': async (_event, ...args) => {
@@ -386,12 +388,12 @@ function createOverrideRegistry(getProcessState) {
     },
 
     'LocalAgentModeSessions_$_sessionsBridgeStatus': async () => {
-      console.log('[ipc:sessionsBridgeStatus] called');
-      return { status: 'disconnected', enabled: false };
+      return { status: bridgeState.enabled ? 'connected' : 'disconnected', enabled: bridgeState.enabled };
     },
 
     'LocalAgentModeSessions_$_setSessionsBridgeEnabled': async (_event, enabled) => {
-      console.log('[ipc:setSessionsBridgeEnabled] enabled=' + enabled);
+      bridgeState.enabled = !!enabled;
+      console.log('[ipc:setSessionsBridgeEnabled] enabled=' + bridgeState.enabled);
       return null;
     },
 

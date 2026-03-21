@@ -389,19 +389,28 @@ test('getBridgeConsent returns consented shape', async () => {
   assert.deepEqual(result, { consented: true });
 });
 
-test('getSessionsBridgeEnabled returns false', async () => {
+test('getSessionsBridgeEnabled defaults to false, persists after set', async () => {
   const registry = createOverrideRegistry(() => ({ running: false, exitCode: 0 }));
-  const handler = matchOverride('test_$_LocalAgentModeSessions_$_getSessionsBridgeEnabled', registry);
-  const result = await handler();
-  assert.equal(result, false);
+  const getHandler = matchOverride('test_$_LocalAgentModeSessions_$_getSessionsBridgeEnabled', registry);
+  const setHandler = matchOverride('test_$_LocalAgentModeSessions_$_setSessionsBridgeEnabled', registry);
+  assert.equal(await getHandler(), false);
+  await setHandler(null, true);
+  assert.equal(await getHandler(), true);
+  await setHandler(null, false);
+  assert.equal(await getHandler(), false);
 });
 
-test('sessionsBridgeStatus returns disconnected shape', async () => {
+test('sessionsBridgeStatus reflects enabled state', async () => {
   const registry = createOverrideRegistry(() => ({ running: false, exitCode: 0 }));
-  const handler = matchOverride('test_$_LocalAgentModeSessions_$_sessionsBridgeStatus', registry);
-  const result = await handler();
-  assert.equal(result.status, 'disconnected');
-  assert.equal(result.enabled, false);
+  const statusHandler = matchOverride('test_$_LocalAgentModeSessions_$_sessionsBridgeStatus', registry);
+  const setHandler = matchOverride('test_$_LocalAgentModeSessions_$_setSessionsBridgeEnabled', registry);
+  const initial = await statusHandler();
+  assert.equal(initial.status, 'disconnected');
+  assert.equal(initial.enabled, false);
+  await setHandler(null, true);
+  const updated = await statusHandler();
+  assert.equal(updated.status, 'connected');
+  assert.equal(updated.enabled, true);
 });
 
 test('bridge no-op handlers return null', async () => {
