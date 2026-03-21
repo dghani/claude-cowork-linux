@@ -216,6 +216,9 @@ _electron_args=(
 
 if [[ "$_perf" == true ]]; then
   export CLAUDE_DEVTOOLS=1
+  export CLAUDE_COWORK_IPC_TAP=1
+  export CLAUDE_COWORK_TRACE_IO=1
+  export CLAUDE_COWORK_VERBOSE=1
   _electron_args+=(
     --inspect=9229
     --remote-debugging-port=9222
@@ -224,6 +227,8 @@ if [[ "$_perf" == true ]]; then
   echo "  PERF MODE"
   echo "  Main process:  chrome://inspect (port 9229) -> Profiler tab"
   echo "  Renderer:      DevTools will open -> Performance tab -> Record"
+  echo "  IPC tap:       $LOG_DIR/ipc-tap.log"
+  echo "  Trace IO:      Enabled (stdin/stdout logging)"
   echo ""
 fi
 

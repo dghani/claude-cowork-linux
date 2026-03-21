@@ -23,6 +23,11 @@ const {
 
 // -- Helpers --
 
+// Verbose logging: only emitted when CLAUDE_COWORK_VERBOSE=1 (set by --perf).
+// Keeps production output clean while preserving diagnostics for debugging.
+const _verbose = process.env.CLAUDE_COWORK_VERBOSE === '1';
+function vlog(msg) { if (_verbose) console.log(msg); }
+
 function getMimeType(filePath) {
   const ext = path.extname(filePath).toLowerCase();
   const MIME_MAP = {
@@ -230,7 +235,7 @@ function createOverrideRegistry(getProcessState) {
 
     'FileSystem_$_openLocalFile': async (_event, sessionId, filePath, showInFolder) => {
       const decoded = decodeURIComponent(filePath);
-      console.log('[Cowork] openLocalFile:', decoded, 'showInFolder:', showInFolder);
+      vlog('[Cowork] openLocalFile: ' + decoded + ' showInFolder: ' + showInFolder);
       if (!path.isAbsolute(decoded)) return;
       try {
         if (showInFolder) {
@@ -249,7 +254,7 @@ function createOverrideRegistry(getProcessState) {
 
     'FileSystem_$_showInFolder': async (_event, filePath) => {
       const decoded = decodeURIComponent(filePath);
-      console.log('[Cowork] showInFolder:', decoded);
+      vlog('[Cowork] showInFolder: ' + decoded);
       try {
         // D-Bus FileManager1 isn't available on Hyprland/wlroots compositors.
         // Open the parent directory with xdg-open instead.
@@ -267,7 +272,7 @@ function createOverrideRegistry(getProcessState) {
     },
 
     'FileSystem_$_writeFileDownloadAndOpen': async (_event, filename, url) => {
-      console.log('[Cowork] writeFileDownloadAndOpen:', filename);
+      vlog('[Cowork] writeFileDownloadAndOpen: ' + filename);
       try {
         const { app, net } = require('electron');
         // Validate filename
@@ -293,7 +298,7 @@ function createOverrideRegistry(getProcessState) {
           dest = path.join(downloadsDir, `${stem}_${i++}${ext}`);
         }
         fs.writeFileSync(dest, buffer);
-        console.log('[Cowork] Downloaded to:', dest);
+        vlog('[Cowork] Downloaded to: ' + dest);
         xdgOpen(dest);
       } catch (e) {
         console.error('[Cowork] writeFileDownloadAndOpen failed:', e.message);
@@ -322,12 +327,12 @@ function createOverrideRegistry(getProcessState) {
     // Startup — Linux has no macOS login items; report disabled
     'Startup_$_isStartupOnLoginEnabled': async () => false,
     'Startup_$_setStartupOnLoginEnabled': async (_event, enabled) => {
-      console.log('[ipc:setStartupOnLoginEnabled] enabled=' + enabled + ' (no-op on Linux)');
+      vlog('[ipc:setStartupOnLoginEnabled] enabled=' + enabled + ' (no-op on Linux)');
       return null;
     },
     'Startup_$_isMenuBarEnabled': async () => false,
     'Startup_$_setMenuBarEnabled': async (_event, enabled) => {
-      console.log('[ipc:setMenuBarEnabled] enabled=' + enabled + ' (no-op on Linux)');
+      vlog('[ipc:setMenuBarEnabled] enabled=' + enabled + ' (no-op on Linux)');
       return null;
     },
 
@@ -339,22 +344,22 @@ function createOverrideRegistry(getProcessState) {
     // ================================================================
 
     'LocalAgentModeSessions_$_abandonBridgeEnvironment': async (_event, ...args) => {
-      console.log('[ipc:abandonBridgeEnvironment] called');
+      vlog('[ipc:abandonBridgeEnvironment] called');
       return null;
     },
 
     'LocalAgentModeSessions_$_deleteBridgeAgentMemory': async (_event, ...args) => {
-      console.log('[ipc:deleteBridgeAgentMemory] called');
+      vlog('[ipc:deleteBridgeAgentMemory] called');
       return null;
     },
 
     'LocalAgentModeSessions_$_deleteBridgeSession': async (_event, ...args) => {
-      console.log('[ipc:deleteBridgeSession] called');
+      vlog('[ipc:deleteBridgeSession] called');
       return null;
     },
 
     'LocalAgentModeSessions_$_getBridgeConsent': async (_event, ...args) => {
-      console.log('[ipc:getBridgeConsent] called');
+      vlog('[ipc:getBridgeConsent] called');
       return { consented: true };
     },
 
@@ -363,27 +368,27 @@ function createOverrideRegistry(getProcessState) {
     },
 
     'LocalAgentModeSessions_$_kickBridgePoll': async (_event, ...args) => {
-      console.log('[ipc:kickBridgePoll] called');
+      vlog('[ipc:kickBridgePoll] called');
       return null;
     },
 
     'LocalAgentModeSessions_$_onBridgePermissionPreflight': async (_event, ...args) => {
-      console.log('[ipc:onBridgePermissionPreflight] called');
+      vlog('[ipc:onBridgePermissionPreflight] called');
       return null;
     },
 
     'LocalAgentModeSessions_$_resetBridge': async (_event, ...args) => {
-      console.log('[ipc:resetBridge] called');
+      vlog('[ipc:resetBridge] called');
       return null;
     },
 
     'LocalAgentModeSessions_$_resetBridgeSession': async (_event, ...args) => {
-      console.log('[ipc:resetBridgeSession] called');
+      vlog('[ipc:resetBridgeSession] called');
       return null;
     },
 
     'LocalAgentModeSessions_$_respondBridgePermissionPreflight': async (_event, ...args) => {
-      console.log('[ipc:respondBridgePermissionPreflight] called');
+      vlog('[ipc:respondBridgePermissionPreflight] called');
       return null;
     },
 
@@ -393,7 +398,7 @@ function createOverrideRegistry(getProcessState) {
 
     'LocalAgentModeSessions_$_setSessionsBridgeEnabled': async (_event, enabled) => {
       bridgeState.enabled = !!enabled;
-      console.log('[ipc:setSessionsBridgeEnabled] enabled=' + bridgeState.enabled);
+      vlog('[ipc:setSessionsBridgeEnabled] enabled=' + bridgeState.enabled);
       return null;
     },
 
@@ -402,17 +407,17 @@ function createOverrideRegistry(getProcessState) {
     // ================================================================
 
     'LocalAgentModeSessions_$_mcpCallTool': async (_event, ...args) => {
-      console.log('[ipc:mcpCallTool] called');
+      vlog('[ipc:mcpCallTool] called');
       return null;
     },
 
     'LocalAgentModeSessions_$_mcpListResources': async (_event, ...args) => {
-      console.log('[ipc:mcpListResources] called');
+      vlog('[ipc:mcpListResources] called');
       return [];
     },
 
     'LocalAgentModeSessions_$_mcpReadResource': async (_event, ...args) => {
-      console.log('[ipc:mcpReadResource] called');
+      vlog('[ipc:mcpReadResource] called');
       return null;
     },
 
@@ -421,12 +426,12 @@ function createOverrideRegistry(getProcessState) {
     // ================================================================
 
     'LocalAgentModeSessions_$_requestFolderTccAccess': async (_event, ...args) => {
-      console.log('[ipc:requestFolderTccAccess] called (auto-granted on Linux)');
+      vlog('[ipc:requestFolderTccAccess] called (auto-granted on Linux)');
       return { granted: true };
     },
 
     'LocalAgentModeSessions_$_setChromePermissionMode': async (_event, mode) => {
-      console.log('[ipc:setChromePermissionMode] mode=' + mode);
+      vlog('[ipc:setChromePermissionMode] mode=' + mode);
       return null;
     },
 
@@ -440,12 +445,12 @@ function createOverrideRegistry(getProcessState) {
     },
 
     'LocalAgentModeSessions_$_onRemoteSessionStart': async (_event, ...args) => {
-      console.log('[ipc:onRemoteSessionStart] called');
+      vlog('[ipc:onRemoteSessionStart] called');
       return null;
     },
 
     'LocalAgentModeSessions_$_openOutputsDir': async (_event, sessionId) => {
-      console.log('[ipc:openOutputsDir] sessionId=' + sessionId);
+      vlog('[ipc:openOutputsDir] sessionId=' + sessionId);
       // Open the session's outputs directory in the file manager
       const orchestrator = global.__coworkSessionOrchestrator;
       const dirs = global.__coworkDirs;
@@ -466,7 +471,7 @@ function createOverrideRegistry(getProcessState) {
     },
 
     'LocalAgentModeSessions_$_setDraftSessionFolders': async (_event, folders) => {
-      console.log('[ipc:setDraftSessionFolders] folders=' + JSON.stringify(folders));
+      vlog('[ipc:setDraftSessionFolders] folders=' + JSON.stringify(folders));
       return null;
     },
 
@@ -475,17 +480,17 @@ function createOverrideRegistry(getProcessState) {
     // ================================================================
 
     'LocalAgentModeSessions_$_respondDirectoryServers': async (_event, ...args) => {
-      console.log('[ipc:respondDirectoryServers] called');
+      vlog('[ipc:respondDirectoryServers] called');
       return null;
     },
 
     'LocalAgentModeSessions_$_respondPluginSearch': async (_event, ...args) => {
-      console.log('[ipc:respondPluginSearch] called');
+      vlog('[ipc:respondPluginSearch] called');
       return null;
     },
 
     'LocalAgentModeSessions_$_syncSkills': async (_event, ...args) => {
-      console.log('[ipc:syncSkills] called');
+      vlog('[ipc:syncSkills] called');
       return null;
     },
 
@@ -494,7 +499,7 @@ function createOverrideRegistry(getProcessState) {
     // ================================================================
 
     'LocalAgentModeSessions_$_shareSession': async (_event, sessionId) => {
-      console.log('[ipc:shareSession] sessionId=' + sessionId + ' (not supported on Linux)');
+      vlog('[ipc:shareSession] sessionId=' + sessionId + ' (not supported on Linux)');
       return null;
     },
   };
@@ -568,7 +573,7 @@ function proactivelyRegisterOverrides(ipcMainHandle, ipcMainRemoveHandler, regis
       }
     }
   }
-  console.log('[Cowork] Proactively registered', _proactiveChannels.size, 'fallback handlers on ipcMain for UUID', uuid);
+  vlog('[Cowork] Proactively registered ' + _proactiveChannels.size + ' fallback handlers on ipcMain for UUID ' + uuid);
   return _proactiveChannels;
 }
 
