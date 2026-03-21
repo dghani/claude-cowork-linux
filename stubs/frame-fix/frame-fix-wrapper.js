@@ -888,22 +888,7 @@ Module.prototype.require = function(id) {
       _sendPatched.add(contents);
       const originalSend = contents.send.bind(contents);
       contents.send = function(channel, ...args) {
-        // If the orchestrator is available, use full normalization (metadata
-        // accumulation, stream_event transform, assistant merging).
-        const orchestrator = global.__coworkSessionOrchestrator;
-        if (orchestrator && typeof orchestrator.normalizeLiveEvent === 'function') {
-          const payloads = orchestrator.normalizeLiveEvent(channel, args[0]);
-          if (payloads.length === 0) {
-            logIgnoredLiveMessage(channel, args[0], 'metadata');
-            return false;
-          }
-          let lastResult;
-          for (const payload of payloads) {
-            lastResult = originalSend(channel, payload);
-          }
-          return lastResult;
-        }
-        // Fallback: simple filter (orchestrator not yet created at bootstrap)
+        // Fallback filter — always available, even before orchestrator
         const ignoredType = getIgnoredLiveMessageType(channel, args[0]);
         if (ignoredType) {
           logIgnoredLiveMessage(channel, args[0], ignoredType);

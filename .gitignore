@@ -119,3 +119,4 @@ Thumbs.db
 install-oneclick.sh.backup*
 __pycache__/
 FAST-PASS-AUDIT.md
+LONG_AUDIT.md
