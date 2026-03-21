@@ -207,7 +207,6 @@ echo "Launching Claude Desktop (electron: $ELECTRON_BIN, password-store: $PASSWO
 "$ELECTRON_BIN" \
   "./${ASAR_FILE}" \
   --no-sandbox \
-  --disable-gpu \
   --password-store="$PASSWORD_STORE" \
   --enable-features=GlobalShortcutsPortal \
   "$@" \
