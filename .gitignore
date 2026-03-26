@@ -55,8 +55,10 @@ TEST_RESULTS.md
 # Build artifacts
 *.exe
 *.nupkg
+*.pkg.tar.*
 pkg/
 src/
+claude-cowork-linux/
 
 # Debug scripts (not needed for users)
 analyze-logs.sh
