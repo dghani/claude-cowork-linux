@@ -285,6 +285,29 @@ if [[ "$_perf" == true ]]; then
   echo ""
 fi
 
+# ── Start local Vosk STT server ────────────────────────────────────
+# Provides low-latency speech-to-text on localhost:2700 for voice input.
+# Killed automatically when this script exits.
+VOSK_PID=""
+if [ -f "$SCRIPT_DIR/vosk-server.py" ] && python3 -c "import vosk" 2>/dev/null; then
+  # Kill any stale Vosk server from a previous run
+  if lsof -ti:2700 >/dev/null 2>&1; then
+    kill $(lsof -ti:2700) 2>/dev/null || true
+    sleep 0.3
+  fi
+  python3 "$SCRIPT_DIR/vosk-server.py" >> "$LOG_DIR/vosk.log" 2>&1 &
+  VOSK_PID=$!
+  echo "Vosk STT server started (PID $VOSK_PID) — ws://127.0.0.1:2700"
+  # Give it a moment to load the model
+  sleep 1
+fi
+cleanup_vosk() {
+  if [[ -n "$VOSK_PID" ]] && kill -0 "$VOSK_PID" 2>/dev/null; then
+    kill "$VOSK_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup_vosk EXIT
+
 # Run electron with the repacked app.asar
 if [[ "$_dev" == true ]]; then
   # Foreground: terminal stays attached (--dev, --devtools, --perf)

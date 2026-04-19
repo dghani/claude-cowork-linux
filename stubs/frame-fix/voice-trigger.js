@@ -1,8 +1,8 @@
-// Voice Input Client for Linux — Standalone dictation via WebSocket
+// Voice Input Client for Linux — Local Vosk STT via WebSocket
 //
-// Connects to /api/ws/speech_to_text/voice_stream to transcribe speech
-// and injects text into the active input field. Works on ALL pages
-// (chat, cowork/task, settings) without needing VoiceModeProvider.
+// Connects to a local Vosk server (ws://127.0.0.1:2700) for low-latency
+// speech-to-text without network round-trips. Falls back to Anthropic's
+// cloud STT if the local server isn't running.
 //
 // Trigger: floating mic button (bottom-right) or Ctrl+Alt+V
 (function() {
@@ -27,31 +27,48 @@
 
   // ── WebSocket ──────────────────────────────────────────────────────
 
+  var VOSK_LOCAL_URL = 'ws://127.0.0.1:2700';
+  var usingLocal = false;
+
   function connectWS() {
     return new Promise(function(resolve, reject) {
-      var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      var host = window.location.host;
-      var params = new URLSearchParams({
-        encoding: 'linear16',
-        sample_rate: '16000',
-        channels: '1',
-        endpointing_ms: '300',
-        utterance_end_ms: '1000',
-        language: 'en'
+      // Try local Vosk server first, fall back to cloud
+      tryConnect(VOSK_LOCAL_URL, true).then(resolve).catch(function() {
+        console.log('[Voice Input] Local Vosk unavailable, falling back to cloud STT');
+        var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        var host = window.location.host;
+        var params = new URLSearchParams({
+          encoding: 'linear16', sample_rate: '16000', channels: '1',
+          endpointing_ms: '300', utterance_end_ms: '1000', language: 'en'
+        });
+        var cloudUrl = protocol + '//' + host + '/api/ws/speech_to_text/voice_stream?' + params.toString();
+        tryConnect(cloudUrl, false).then(resolve).catch(reject);
       });
-      var url = protocol + '//' + host + '/api/ws/speech_to_text/voice_stream?' + params.toString();
+    });
+  }
 
+  function tryConnect(url, isLocal) {
+    return new Promise(function(resolve, reject) {
       console.log('[Voice Input] Connecting to:', url);
-      ws = new WebSocket(url);
-      ws.binaryType = 'arraybuffer';
+      var socket = new WebSocket(url);
+      socket.binaryType = 'arraybuffer';
 
-      ws.onopen = function() {
-        console.log('[Voice Input] WebSocket connected');
+      // Quick timeout for local connection attempt (don't wait long)
+      var connectTimeout = isLocal ? setTimeout(function() {
+        socket.close();
+        reject(new Error('Local server timeout'));
+      }, 500) : null;
+
+      socket.onopen = function() {
+        if (connectTimeout) clearTimeout(connectTimeout);
+        ws = socket;
+        usingLocal = isLocal;
+        console.log('[Voice Input] Connected (' + (isLocal ? 'local Vosk' : 'cloud') + ')');
         startKeepAlive();
         resolve();
       };
 
-      ws.onmessage = function(e) {
+      socket.onmessage = function(e) {
         if (typeof e.data === 'string') {
           try {
             var msg = JSON.parse(e.data);
@@ -62,15 +79,28 @@
         }
       };
 
-      ws.onerror = function(e) {
-        console.error('[Voice Input] WebSocket error');
+      socket.onerror = function(e) {
+        if (connectTimeout) clearTimeout(connectTimeout);
         reject(new Error('WebSocket error'));
       };
 
-      ws.onclose = function() {
+      socket.onclose = function() {
+        if (connectTimeout) clearTimeout(connectTimeout);
         console.log('[Voice Input] WebSocket closed');
         stopKeepAlive();
-        if (active) stop();
+        ws = null;
+        if (active) {
+          console.log('[Voice Input] Reconnecting in 1s...');
+          setTimeout(function() {
+            if (!active) return;
+            connectWS().then(function() {
+              console.log('[Voice Input] Reconnected');
+            }).catch(function(err) {
+              console.error('[Voice Input] Reconnect failed:', err);
+              stop();
+            });
+          }, 1000);
+        }
       };
     });
   }

@@ -123,3 +123,6 @@ install-oneclick.sh.backup*
 __pycache__/
 FAST-PASS-AUDIT.md
 LONG_AUDIT.md
+
+# Vosk speech-to-text model (downloaded at runtime, ~40MB)
+vosk-model/
