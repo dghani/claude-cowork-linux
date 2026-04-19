@@ -18,7 +18,7 @@ import websockets
 from vosk import Model, KaldiRecognizer
 
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "vosk-model", "vosk-model-small-en-us-0.15")
+                          "vosk-model", "vosk-model-en-us-0.22")
 HOST = "127.0.0.1"
 PORT = 2700
 SAMPLE_RATE = 16000
@@ -76,18 +76,14 @@ async def handle_client(websocket, model):
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
-        # Flush final result
-        result = json.loads(rec.FinalResult())
-        text = result.get("text", "").strip()
-        if text:
-            try:
-                await websocket.send(json.dumps({
-                    "type": "TranscriptText",
-                    "data": text
-                }))
-            except websockets.exceptions.ConnectionClosed:
-                pass
-        print(f"[Vosk] Client disconnected: {websocket.remote_address}")
+        # Discard any buffered audio — don't send stale results
+        try:
+            rec.FinalResult()  # flush internal buffers
+        except Exception:
+            pass
+        # Delete the recognizer to free all Kaldi memory/CPU resources
+        del rec
+        print(f"[Vosk] Client disconnected, recognizer released: {websocket.remote_address}")
 
 
 async def main():

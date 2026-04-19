@@ -309,13 +309,17 @@
   }
 
   function stop() {
-    active = false;
+    active = false;        // must be first — prevents onclose from reconnecting
     clearAutoSend();
     stopRecording();
     closeWS();
+    // Wipe all transcript state
+    finalTranscript = '';
     currentTranscript = '';
+    cachedField = null;
+    usingLocal = false;
     updateButtonState();
-    console.log('[Voice Input] Stopped');
+    console.log('[Voice Input] Stopped — all state reset');
   }
 
   function toggle() {
