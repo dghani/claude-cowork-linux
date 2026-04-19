@@ -27,7 +27,7 @@ const { createDirs } = require('./cowork/dirs.js');
 const { createSessionOrchestrator } = require('./cowork/session_orchestrator.js');
 const { createSessionStore } = require('./cowork/session_store.js');
 const { createIpcTap } = require('./cowork/ipc_tap.js');
-const { createOverrideRegistry, matchOverride, extractEipcUuid, proactivelyRegisterOverrides, isProactiveChannel } = require('./cowork/ipc_overrides.js');
+const { createOverrideRegistry, matchOverride, matchWrapperOverride, extractEipcUuid, proactivelyRegisterOverrides, isProactiveChannel } = require('./cowork/ipc_overrides.js');
 
 // Suppress EPIPE errors on stdout/stderr (normal in piped/Electron environments)
 // and prevent them from becoming uncaught exception crash dialogs.
@@ -1099,6 +1099,14 @@ Module.prototype.require = function(id) {
           if (overrideHandler) {
             return origIpcHandle(channel, overrideHandler);
           }
+
+          // Wrapper overrides compose with the original handler rather than
+          // replacing it, preserving the asar's logic while patching results.
+          const wrapperFactory = matchWrapperOverride(channel);
+          if (wrapperFactory) {
+            return origIpcHandle(channel, wrapperFactory(handler));
+          }
+
           return origIpcHandle(channel, asarAdapter.wrapHandler(channel, handler));
         };
         console.log('[Cowork] webContents.ipc.handle() patched for override interception');

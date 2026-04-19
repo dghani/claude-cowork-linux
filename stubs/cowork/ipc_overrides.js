@@ -505,6 +505,42 @@ function createOverrideRegistry(getProcessState) {
   };
 }
 
+// -- Wrapper overrides --
+// Unlike regular overrides (which replace the handler entirely), wrapper
+// overrides compose with the original handler. Each entry is a function
+// that receives the original handler and returns a new handler, allowing
+// post-processing of results while preserving the asar's own logic.
+//
+// This is used for handlers where we need most of the original behavior
+// but must patch specific fields (e.g. feature-support flags gated to macOS).
+
+const WRAPPER_OVERRIDES = {
+  // The asar's getSupportedFeatures gates voice/dictation features to
+  // process.platform === "darwin". On Linux, these come back as
+  // { status: "unavailable" }. Wrap the original handler and patch
+  // voice-related fields so the webapp enables voice input.
+  'AppFeatures_$_getSupportedFeatures': (originalHandler) => {
+    return async function(event, ...args) {
+      const result = await originalHandler(event, ...args);
+      if (result && typeof result === 'object') {
+        // quickEntryDictation — voice dictation (gated to macOS 14+)
+        if (!result.quickEntryDictation || result.quickEntryDictation.status === 'unavailable') {
+          result.quickEntryDictation = { status: 'supported' };
+        }
+        // nativeQuickEntry — the quick-access overlay (gated to macOS 13+)
+        if (!result.nativeQuickEntry || result.nativeQuickEntry.status === 'unavailable') {
+          result.nativeQuickEntry = { status: 'supported' };
+        }
+        // louderPenguin — audio/speaker/voice conversation (gated to macOS+Win32)
+        if (!result.louderPenguin || result.louderPenguin.status === 'unavailable') {
+          result.louderPenguin = { status: 'supported' };
+        }
+      }
+      return result;
+    };
+  },
+};
+
 // -- Channel matching --
 
 function matchOverride(channel, registry) {
@@ -512,6 +548,16 @@ function matchOverride(channel, registry) {
   for (const suffix of Object.keys(registry)) {
     if (channel.endsWith(suffix)) {
       return registry[suffix];
+    }
+  }
+  return null;
+}
+
+function matchWrapperOverride(channel) {
+  if (typeof channel !== 'string') return null;
+  for (const suffix of Object.keys(WRAPPER_OVERRIDES)) {
+    if (channel.endsWith(suffix)) {
+      return WRAPPER_OVERRIDES[suffix];
     }
   }
   return null;
@@ -584,6 +630,7 @@ function isProactiveChannel(channel) {
 module.exports = {
   createOverrideRegistry,
   matchOverride,
+  matchWrapperOverride,
   extractEipcUuid,
   proactivelyRegisterOverrides,
   isProactiveChannel,

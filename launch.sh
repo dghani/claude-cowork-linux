@@ -103,9 +103,48 @@ fi
 # This causes the mainWindow/findInPage preloads to crash before exposing `process`
 # via contextBridge, breaking the renderer shell. Drop the isPackaged requirement
 # for file:// origins — the content is inside our asar, so there's no security risk.
-if [ -f "$INDEX_JS" ] && grep -q 'e\.protocol==="file:"&&Ee\.app\.isPackaged===!0' "$INDEX_JS"; then
+# Match any minified variable name (e.g. Ee.app, wA.app) before .isPackaged.
+if [ -f "$INDEX_JS" ] && grep -q 'protocol==="file:"&&[A-Za-z]\+\.app\.isPackaged===!0' "$INDEX_JS"; then
   echo "Patching origin validation for file:// preloads..."
-  sed -i 's/e\.protocol==="file:"&&Ee\.app\.isPackaged===!0/e.protocol==="file:"/g' "$INDEX_JS"
+  sed -i 's/\.protocol==="file:"&&[A-Za-z]\+\.app\.isPackaged===!0/.protocol==="file:"/g' "$INDEX_JS"
+fi
+
+# ── Linux platform support ─────────────────────────────────────────
+# The minified index.js defines platform flags:
+#   en = process.platform==="darwin"
+#   ws = process.platform==="win32"
+#   WhA = en||ws              (combined desktop flag)
+# Many features are gated behind these flags. We add isLinux alongside
+# en and ws, then patch the various gate patterns to include it.
+
+# Step 1: Define isLinux variable and update WhA combined flag
+if [ -f "$INDEX_JS" ] && grep -q ',ws=process\.platform==="win32",WhA=en||ws;' "$INDEX_JS"; then
+  echo "Defining isLinux platform variable and updating WhA..."
+  sed -i 's/,ws=process\.platform==="win32",WhA=en||ws;/,ws=process.platform==="win32",isLinux=process.platform==="linux",WhA=en||ws||isLinux;/g' "$INDEX_JS"
+fi
+
+# Step 2: Patch darwin-only feature gates (e.g. quickEntryDictation, nativeQuickEntry).
+# These return {status:"unavailable"} when process.platform!=="darwin".
+# Prepend an isLinux early-return so Linux gets {status:"supported"}.
+# Anchored on "return" to prevent double-application (after patching, the
+# search pattern no longer matches because "return isLinux?" != "return process.platform").
+if [ -f "$INDEX_JS" ] && grep -q 'return process\.platform!=="darwin"?{status:"unavailable"}' "$INDEX_JS"; then
+  echo "Patching darwin-only feature gates: adding isLinux early return..."
+  sed -i 's/return process\.platform!=="darwin"?{status:"unavailable"}/return isLinux?{status:"supported"}:process.platform!=="darwin"?{status:"unavailable"}/g' "$INDEX_JS"
+fi
+
+# Step 3: Patch darwin+win32 gate (used by louderPenguin/voice features).
+# Pattern: process.platform!=="darwin"&&process.platform!=="win32"?{status:"unavailable"}
+# Add &&!isLinux so Linux passes through.
+if [ -f "$INDEX_JS" ] && grep -q 'process\.platform!=="darwin"&&process\.platform!=="win32"?{status:"unavailable"}' "$INDEX_JS"; then
+  echo "Patching darwin+win32 feature gate: adding isLinux..."
+  sed -i 's/process\.platform!=="darwin"&&process\.platform!=="win32"?{status:"unavailable"}/process.platform!=="darwin"\&\&process.platform!=="win32"\&\&!isLinux?{status:"unavailable"}/g' "$INDEX_JS"
+fi
+
+# Step 4: Patch inline (en||ws) platform guards to include isLinux.
+if [ -f "$INDEX_JS" ] && grep -q '(en||ws)' "$INDEX_JS"; then
+  echo "Patching (en||ws) platform guards: adding isLinux..."
+  sed -i 's/(en||ws)/(en||ws||isLinux)/g' "$INDEX_JS"
 fi
 
 # Only repack if stub is newer than asar (or asar doesn't exist)
