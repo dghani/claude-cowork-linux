@@ -1111,6 +1111,29 @@ Module.prototype.require = function(id) {
         };
         console.log('[Cowork] webContents.ipc.handle() patched for override interception');
       }
+
+      // ── Voice trigger injection ──────────────────────────────────────
+      // Inject voice-trigger.js into claude.ai pages so users can activate
+      // voice conversation mode via Ctrl+Shift+V or a floating mic button.
+      // The webapp's VoiceModeProvider IS mounted for desktop but the UI
+      // button is hidden; this script finds the Zustand store through React
+      // fiber traversal and triggers voice mode programmatically.
+      if (REAL_PLATFORM === 'linux') {
+        contents.on('did-finish-load', () => {
+          try {
+            const url = contents.getURL();
+            if (url && (url.includes('claude.ai') || url.includes('anthropic.com'))) {
+              const voiceScript = withRealPlatform(() =>
+                fs.readFileSync(path.join(__dirname, 'voice-trigger.js'), 'utf-8')
+              );
+              contents.executeJavaScript(voiceScript).catch(() => {});
+              console.log('[Voice Trigger] Injected into webapp');
+            }
+          } catch (e) {
+            console.warn('[Voice Trigger] Injection failed:', e.message);
+          }
+        });
+      }
     }, 'web-contents-created');
 
     // Also patch on browser-window-created for certainty
