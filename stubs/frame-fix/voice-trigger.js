@@ -20,6 +20,8 @@
   var active = false;
   var currentTranscript = '';
   var finalTranscript = '';
+  var autoSendTimer = null;
+  var AUTO_SEND_DELAY_MS = 2500; // silence duration before auto-sending
 
   // ── WebSocket ──────────────────────────────────────────────────────
 
@@ -78,13 +80,62 @@
     if (type === 'TranscriptInterim' && typeof data === 'string') {
       currentTranscript = data;
       updateInputField(finalTranscript + data);
+      // Still speaking — cancel any pending auto-send
+      clearAutoSend();
     } else if (type === 'TranscriptText' && typeof data === 'string') {
       finalTranscript += data + ' ';
       currentTranscript = '';
       updateInputField(finalTranscript);
+      // Finalized text received — start silence countdown
+      scheduleAutoSend();
     } else if (type === 'TranscriptEndpoint') {
-      // End of utterance — could auto-submit here if desired
+      // Server detected end of utterance — send sooner if we have text
+      if (finalTranscript.trim()) {
+        scheduleAutoSend(1000);
+      }
     }
+  }
+
+  function scheduleAutoSend(delayOverride) {
+    clearAutoSend();
+    var delay = delayOverride || AUTO_SEND_DELAY_MS;
+    autoSendTimer = setTimeout(function() {
+      autoSendTimer = null;
+      if (!active || !finalTranscript.trim()) return;
+      console.log('[Voice Input] Auto-sending after silence');
+      submitInput();
+    }, delay);
+  }
+
+  function clearAutoSend() {
+    if (autoSendTimer) {
+      clearTimeout(autoSendTimer);
+      autoSendTimer = null;
+    }
+  }
+
+  function submitInput() {
+    // Try clicking the send button
+    var sendBtn = document.querySelector('button[aria-label="Send message"]')
+      || document.querySelector('button[aria-label*="Send"]');
+    if (sendBtn && !sendBtn.disabled) {
+      sendBtn.click();
+      console.log('[Voice Input] Message sent via button click');
+    } else {
+      // Fallback: simulate Enter keypress on the input field
+      var field = findInputField();
+      if (field) {
+        var enterEvent = new KeyboardEvent('keydown', {
+          key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+          bubbles: true, cancelable: true
+        });
+        field.element.dispatchEvent(enterEvent);
+        console.log('[Voice Input] Message sent via Enter key');
+      }
+    }
+    // Reset transcript for next utterance
+    finalTranscript = '';
+    currentTranscript = '';
   }
 
   function startKeepAlive() {
@@ -226,6 +277,7 @@
 
   function stop() {
     active = false;
+    clearAutoSend();
     stopRecording();
     closeWS();
     currentTranscript = '';
