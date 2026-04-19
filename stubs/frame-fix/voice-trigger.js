@@ -21,7 +21,9 @@
   var currentTranscript = '';
   var finalTranscript = '';
   var autoSendTimer = null;
-  var AUTO_SEND_DELAY_MS = 2500; // silence duration before auto-sending
+  // Silence duration (ms) before auto-sending. Configurable via right-click
+  // on the mic button or window.__voiceMode.setDelay(ms).
+  var AUTO_SEND_DELAY_MS = 8000;
 
   // ── WebSocket ──────────────────────────────────────────────────────
 
@@ -89,16 +91,17 @@
       // Finalized text received — start silence countdown
       scheduleAutoSend();
     } else if (type === 'TranscriptEndpoint') {
-      // Server detected end of utterance — send sooner if we have text
-      if (finalTranscript.trim()) {
-        scheduleAutoSend(1000);
+      // Server detected end of utterance — send sooner if auto-send is on
+      if (finalTranscript.trim() && AUTO_SEND_DELAY_MS > 0) {
+        scheduleAutoSend(Math.min(AUTO_SEND_DELAY_MS, 3000));
       }
     }
   }
 
   function scheduleAutoSend(delayOverride) {
     clearAutoSend();
-    var delay = delayOverride || AUTO_SEND_DELAY_MS;
+    var delay = delayOverride != null ? delayOverride : AUTO_SEND_DELAY_MS;
+    if (delay <= 0) return; // auto-send disabled
     autoSendTimer = setTimeout(function() {
       autoSendTimer = null;
       if (!active || !finalTranscript.trim()) return;
@@ -299,7 +302,12 @@
     start: start,
     stop: stop,
     toggle: toggle,
-    isActive: function() { return active; }
+    isActive: function() { return active; },
+    setDelay: function(ms) {
+      AUTO_SEND_DELAY_MS = Math.max(1000, Number(ms) || 8000);
+      console.log('[Voice Input] Auto-send delay set to ' + AUTO_SEND_DELAY_MS + 'ms');
+    },
+    getDelay: function() { return AUTO_SEND_DELAY_MS; }
   };
 
   // ── Keyboard shortcut: Ctrl+Alt+V ──────────────────────────────────
@@ -311,6 +319,74 @@
       toggle();
     }
   }, true);
+
+  // ── Delay picker menu (right-click mic button) ────────────────────
+
+  function showDelayMenu(anchorEl) {
+    var existing = document.getElementById('__voice-delay-menu');
+    if (existing) { existing.remove(); return; }
+
+    var options = [
+      { label: '5 seconds', value: 5000 },
+      { label: '8 seconds', value: 8000 },
+      { label: '12 seconds', value: 12000 },
+      { label: '20 seconds', value: 20000 },
+      { label: '30 seconds', value: 30000 },
+      { label: 'Off (manual send)', value: 0 }
+    ];
+
+    var menu = document.createElement('div');
+    menu.id = '__voice-delay-menu';
+    var ms = menu.style;
+    ms.position = 'fixed';
+    ms.bottom = '130px';
+    ms.right = '24px';
+    ms.background = '#1e1e2e';
+    ms.border = '1px solid #444';
+    ms.borderRadius = '8px';
+    ms.padding = '6px 0';
+    ms.zIndex = '100000';
+    ms.boxShadow = '0 4px 16px rgba(0,0,0,0.4)';
+    ms.fontFamily = 'system-ui, sans-serif';
+    ms.fontSize = '13px';
+    ms.minWidth = '170px';
+
+    var title = document.createElement('div');
+    title.textContent = 'Auto-send delay';
+    title.style.cssText = 'padding:6px 14px 4px;color:#aaa;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;';
+    menu.appendChild(title);
+
+    options.forEach(function(opt) {
+      var item = document.createElement('div');
+      var isCurrent = (opt.value === AUTO_SEND_DELAY_MS) || (opt.value === 0 && AUTO_SEND_DELAY_MS === 0);
+      item.textContent = (isCurrent ? '\u2713 ' : '   ') + opt.label;
+      item.style.cssText = 'padding:6px 14px;color:#e0e0e0;cursor:pointer;';
+      item.addEventListener('mouseenter', function() { item.style.background = '#333'; });
+      item.addEventListener('mouseleave', function() { item.style.background = 'none'; });
+      item.addEventListener('click', function() {
+        AUTO_SEND_DELAY_MS = opt.value;
+        if (opt.value === 0) {
+          clearAutoSend();
+          console.log('[Voice Input] Auto-send disabled');
+        } else {
+          console.log('[Voice Input] Auto-send delay set to ' + opt.value + 'ms');
+        }
+        menu.remove();
+      });
+      menu.appendChild(item);
+    });
+
+    document.body.appendChild(menu);
+
+    // Close on click outside
+    function closeMenu(e) {
+      if (!menu.contains(e.target) && e.target !== anchorEl) {
+        menu.remove();
+        document.removeEventListener('click', closeMenu, true);
+      }
+    }
+    setTimeout(function() { document.addEventListener('click', closeMenu, true); }, 0);
+  }
 
   // ── Floating microphone button ─────────────────────────────────────
 
@@ -353,6 +429,10 @@
     btn.addEventListener('mouseenter', function() { btn.style.transform = 'scale(1.1)'; });
     btn.addEventListener('mouseleave', function() { btn.style.transform = 'scale(1)'; });
     btn.addEventListener('click', function(e) { e.preventDefault(); toggle(); });
+    btn.addEventListener('contextmenu', function(e) {
+      e.preventDefault();
+      showDelayMenu(btn);
+    });
 
     document.body.appendChild(btn);
 
