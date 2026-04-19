@@ -1114,20 +1114,25 @@ Module.prototype.require = function(id) {
 
       // ── Voice trigger injection ──────────────────────────────────────
       // Inject voice-trigger.js into claude.ai pages so users can activate
-      // voice conversation mode via Ctrl+Shift+V or a floating mic button.
-      // The webapp's VoiceModeProvider IS mounted for desktop but the UI
-      // button is hidden; this script finds the Zustand store through React
-      // fiber traversal and triggers voice mode programmatically.
+      // voice input via Ctrl+Alt+V or a floating mic button. The script is
+      // a standalone WebSocket client that connects to the speech-to-text
+      // endpoint and injects transcribed text into the active input field.
       if (REAL_PLATFORM === 'linux') {
         contents.on('did-finish-load', () => {
           try {
             const url = contents.getURL();
+            console.log('[Voice Trigger] did-finish-load URL:', url);
             if (url && (url.includes('claude.ai') || url.includes('anthropic.com'))) {
+              const scriptPath = path.join(__dirname, 'voice-trigger.js');
               const voiceScript = withRealPlatform(() =>
-                fs.readFileSync(path.join(__dirname, 'voice-trigger.js'), 'utf-8')
+                fs.readFileSync(scriptPath, 'utf-8')
               );
-              contents.executeJavaScript(voiceScript).catch(() => {});
-              console.log('[Voice Trigger] Injected into webapp');
+              console.log('[Voice Trigger] Script loaded (' + voiceScript.length + ' bytes), injecting...');
+              contents.executeJavaScript(voiceScript).then(() => {
+                console.log('[Voice Trigger] Injection succeeded');
+              }).catch((err) => {
+                console.error('[Voice Trigger] executeJavaScript failed:', err && err.message);
+              });
             }
           } catch (e) {
             console.warn('[Voice Trigger] Injection failed:', e.message);

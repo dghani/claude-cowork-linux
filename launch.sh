@@ -40,7 +40,7 @@ if [ -f "$NATIVE_STUB_SRC_FILE" ]; then
 fi
 
 # Sync frame-fix files so wrapper changes take effect without a full reinstall
-for _ff_file in frame-fix-entry.js frame-fix-wrapper.js; do
+for _ff_file in frame-fix-entry.js frame-fix-wrapper.js voice-trigger.js; do
   if [ -f "stubs/frame-fix/$_ff_file" ]; then
     cp -f "stubs/frame-fix/$_ff_file" "linux-app-extracted/$_ff_file"
   fi
